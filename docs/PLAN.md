@@ -2,8 +2,9 @@
 
 ## 현재 상태
 
-- 단계: **요구사항·실행 계약 통합 완료, 구현 착수 전**.
-- 이 워크스페이스의 산출물은 개발 문서와 중앙 설정 예제다. 애플리케이션 코드, 사내 계정 접속, 실제 Worker·Provider·패키지 업데이트 시험은 수행하지 않았다.
+- 단계: **P1 진행 중. P2·P3의 공통 상태·설정·API 기반 구현 및 로컬 검증 완료**.
+- npm workspace에 shared·dispatcher·worker 패키지를 구성했다. 중앙 YAML 검증·revision·projection, SQLite 상태와 Claim/Lease/완료/Delivery, 인증된 Hono API, 기본 Octokit 폴링, Worker 진단·RPC·설정 캐시·결과 저널을 구현했다.
+- `npm run check`: TypeScript 검사, Vitest 56개 테스트, 세 패키지 JS 빌드를 통과했다. 환경은 Linux / Node.js 24.22.1이다. 외부 GitHub·AI 실행은 Fixture와 구별하며 사내 계정·실제 구독 런타임·Windows·자동 업데이트 시험은 수행하지 않았다.
 - 제품 정책과 배포 구조는 [SPEC](SPEC.md), 구체적인 동작 계약은 [TECH](TECH.md)를 기준으로 한다.
 - 외부 환경에서 제공할 값은 GHES 호스트·테스트 저장소·PAT, Dispatcher 주소, 사내 npm 레지스트리·scope다. Worker는 기존 `gh` 및 Codex/Claude 구독 로그인을 사용한다.
 - 기존 개발 코드가 있다면 먼저 구조와 동작을 확인한다. 문서와 파일 배치가 다르다는 이유로 전체를 재작성하지 않는다.
@@ -15,22 +16,22 @@
 
 **관련 요구:** F1, F3, F6, F8–F12, N2, N4, N6.
 
-**상태:** 예정.
+**상태:** 진행 중.
 
-- [ ] 기존 코드·설정·작업 공간을 조사하고 유지할 동작과 필요한 변경을 기록한다.
-- [ ] TypeScript/Node.js LTS, npm workspace, Hono, Drizzle/SQLite, Octokit, 테스트 의존성의 실제 버전과 `engines`를 고정한다.
+- [x] 신규 저장소와 최종 하네스를 확인했다. 재사용할 기존 애플리케이션 코드는 없으며 문서·설정 예제를 보존했다.
+- [x] Node.js 24 LTS, TypeScript, npm workspace, Hono, Drizzle/SQLite, Octokit, Vitest와 빌드 도구 버전을 고정하고 lockfile을 추가했다.
 - [ ] Dispatcher PAT로 허용 저장소·댓글·PR·라벨 행위자·Write 권한을 읽고 시스템 라벨을 관리하는 작은 시험을 수행한다.
 - [ ] Worker의 `gh`로 정확한 사내 호스트의 계정을 확인하고 자기 명의 댓글·Git 작업을 수행한다. Git 작성자·서명을 변경하지 않는지 확인한다.
 - [ ] Codex App Server의 로그인·thread/turn·모델 카탈로그·effort·steer·interrupt·Auto Review를 실제 세션으로 시험한다.
 - [ ] Claude 공식 실행 파일의 구독 로그인·JSON 스트림·명시적 세션 재개·Auto 모드·무인 질문 처리·interrupt 후 steer 재개를 시험한다.
 - [ ] 사람 질문의 비동기 해소·Turn 종료와 실제 blocking 요청을 구분해 Fixture로 남긴다.
 - [ ] Launcher IPC, Worker 로컬 저널, 종료·READY 계약의 최소 골격을 만든다. 운영 환경값을 코드에 박아 넣지 않는다.
-- [ ] 중앙 YAML의 공통 스키마·비밀값 참조·Worker projection·revision 계약을 고정하고 예제 파싱과 잘못된 후보의 거절을 시험한다.
+- [x] 중앙 YAML의 공통 스키마·명시적 비밀값 참조·Worker projection·revision 계약을 구현하고 예제 파싱·잘못된 후보 거절·원자적 활성화를 시험했다.
 - [ ] Codex와 Claude에서 기존 세션 재개 시 중앙 지침 교체가 실제 적용되는 경로를 시험한다. Claude의 프롬프트 snapshot 옵션과 긴 지침 전달도 포함한다.
 
 **완료 기준:** 두 엔진에서 구독 로그인으로 실제 실행이 가능하고 필수 제어·승인 경로가 확인된다. 지원 런타임 버전·명령·schema·시험 결과와 기존 코드 재사용 계획이 기록된다.
 
-**근거:** 아직 없음. 시험 환경·버전·결과·관련 코드 위치를 기록한 뒤 완료한다.
+**근거:** `packages/shared/src/`, `packages/dispatcher/src/`, `packages/worker/src/`, `tests/`. 실제 설치된 Codex/Claude의 구독 실행·제어·자동 검토가 검증되지 않아 P1 전체는 완료하지 않았다.
 
 ## P2. 단일 Worker의 GitHub 대화 종단간 실행
 
@@ -147,7 +148,7 @@
 
 ## 통합 검증 시나리오
 
-모든 항목은 **실행 예정**이다. 실제 시험 후 결과와 근거를 추가한다.
+아래 표는 전체 제품 수용 시험이다. 현재 `tests/`의 56개 로컬 시험은 설정·모델 선택·상태 전이·HTTP·기본 폴링·Worker 로컬 복구·RPC의 일부 계약을 검증한다. 이 통과를 사내 GitHub·실제 구독 런타임·Windows·무인 업데이트의 종단간 시험 통과로 취급하지 않는다.
 
 | ID | 시나리오 | 기대 결과 | 요구·단계 |
 |---|---|---|---|
@@ -209,6 +210,6 @@
 
 ## 바로 이어갈 작업
 
-**P1부터 시작한다.** 기존 개발 저장소와 사내 테스트 환경을 확인하고, 두 런타임의 작은 실제 실행과 GitHub 폴링/게시 시험을 작성한다. 성공한 계약을 공통 타입·Fixture로 고정한 뒤 P2의 한 세션 종단간 경로를 구현한다. 계정·주소 같은 환경값이 아직 없으면 그 부분만 실제 시험 대기로 표시하고, 순수 상태 전이·폴링 정규화·모델 버전 비교·중앙 설정 검증·게시 렌더러·Launcher Fixture 작업을 계속한다.
+**P1의 실제 런타임 검증과 P2의 종단간 연결을 진행한다.** Codex·Claude 실행 어댑터, Worker 등록·Heartbeat·실행·게시 루프를 구현하고 실제 설치 환경에서 Auto Review·stop·steer·질문 종료를 확인한다. 현재 폴러에는 PR 리뷰 본문 수집, 활성화 구간 전체 재생·보정, 시스템 배정/상태 라벨 동기화, 실행 직전 권한 재검증과 삭제된 대기 입력 확인이 남아 있다. 이후 Launcher IPC·설치·무인 업데이트와 Windows 실제 시험을 진행한다. 외부 환경값이 필요한 시험만 대기로 두고 독립 작업을 계속한다.
 
 문서의 개발 순서는 제품 기능의 우선순위이며 실사용 완료 범위를 줄이는 기준이 아니다. 구현 중 필수 동작을 바꾸어야 할 이유가 발견되면 영향과 대안을 먼저 제시하고, 현재 동작 문서와 계획을 함께 갱신한다.

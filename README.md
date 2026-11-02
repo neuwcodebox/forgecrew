@@ -4,7 +4,33 @@
 
 ForgeCrew는 사내 GitHub Enterprise Server의 Issue와 Pull Request를 AI 대화 세션으로 사용하는 경량 셀프호스팅 플랫폼입니다. 단일 Dispatcher가 요청을 분배하고, 여러 PC의 Worker가 각 동료의 개발 환경과 로그인으로 Codex·Claude를 실행합니다.
 
-> 현재 이 워크스페이스에는 요구사항·기술 설계·개발 계획이 들어 있습니다. 실행 가능한 서비스와 배포 패키지는 아직 포함되어 있지 않습니다.
+> 개발 중입니다. 중앙 설정·SQLite 실행 상태·인증된 Dispatcher API·기본 GitHub 폴링과 Worker 진단이 구현되어 있습니다. 실제 AI 실행 어댑터와 Worker 실행 루프, Launcher·무인 업데이트는 아직 구현 중입니다. 실사용 릴리스 완료 여부는 [개발 계획](docs/PLAN.md)을 기준으로 확인하세요.
+
+## 개발 환경에서 실행
+
+Node.js 24 LTS와 npm을 사용합니다. 의존성 버전은 `package-lock.json`으로 고정합니다.
+
+```bash
+npm ci
+npm run check
+cp config.example.yaml config.yaml
+```
+
+`config.yaml`의 GitHub 호스트·API 주소·허용 저장소와 `server.dataDir`를 실제 환경에 맞게 수정합니다. 로컬 개발의 데이터 경로는 `.local/dispatcher`처럼 쓰기 가능한 경로를 사용하세요. PAT와 32자 이상의 Worker 등록용 비밀값을 각각 `FORGECREW_GITHUB_PAT`, `FORGECREW_REGISTRATION_TOKEN` 환경변수로 설정한 뒤 시작합니다.
+
+```bash
+npm run dev:dispatcher
+```
+
+`/health/live`, `/health/ready`에서 상태를 확인할 수 있습니다. 설정 파일은 주기적으로 다시 읽으며, 잘못된 변경은 마지막 정상 설정을 유지합니다. Worker용 `/v1/*` API는 Worker별 인증이 필요합니다. 최초 등록에는 등록용 비밀값을 사용하며, AI·GitHub 로그인 토큰을 등록 요청에 포함하지 않습니다.
+
+Worker 진단은 로컬 Worker JSON 설정을 읽습니다. `token`에는 Dispatcher 통신용 무작위 플랫폼 토큰을 넣으며, GitHub나 AI의 로그인 토큰을 복사하지 않습니다.
+
+```bash
+node packages/worker/dist/cli.js doctor --config /path/to/worker.json
+```
+
+현재 CLI는 `doctor`를 제공합니다. 설치·백그라운드 실행·자동 업데이트 명령과 두 엔진의 실제 작업 실행은 개발 중입니다.
 
 ## 사용 방식
 
@@ -53,4 +79,4 @@ Worker가 게시하는 AI 답변에는 다음과 같은 작은 표기를 자동�
 | [config.example.yaml](config.example.yaml) | 공통 설정·지침·표기의 초기 예제 |
 | [docs/PLAN.md](docs/PLAN.md) | 구현 단계와 검증 시나리오, 현재 진행 상태 |
 
-구현은 PLAN의 P1부터 진행합니다. 기존 개발 코드가 있다면 먼저 확인하고 이 문서와 통합합니다.
+검증 결과와 다음 구현 항목은 PLAN에서 관리합니다.

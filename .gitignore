@@ -5,6 +5,8 @@ Thumbs.db
 Desktop.ini
 .env
 .env.*
+config.yaml
+worker.json
 !.env.example
 !.env.*.example
 *.sqlite

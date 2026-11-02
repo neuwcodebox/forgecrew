@@ -1,0 +1,36 @@
+{
+  "name": "forgecrew-workspace",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "workspaces": [
+    "packages/*"
+  ],
+  "engines": {
+    "node": ">=24.0.0 <25"
+  },
+  "scripts": {
+    "build": "npm run build --workspaces --if-present",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "check": "npm run typecheck && npm test && npm run build",
+    "dev:dispatcher": "node --experimental-strip-types packages/dispatcher/src/main.ts",
+    "doctor": "node --experimental-strip-types packages/worker/src/cli.ts doctor"
+  },
+  "dependencies": {
+    "@hono/node-server": "2.1.6",
+    "@octokit/rest": "22.0.1",
+    "better-sqlite3": "13.0.3",
+    "drizzle-orm": "0.45.4",
+    "hono": "4.13.16",
+    "yaml": "2.9.1",
+    "zod": "4.6.7"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "9.6.0",
+    "@types/node": "24.19.2",
+    "tsup": "9.0.0",
+    "typescript": "7.0.2",
+    "vitest": "5.0.5"
+  }
+}
