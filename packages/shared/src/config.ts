@@ -73,8 +73,28 @@ export function workerProjection(config: Config) {
   return { configRevision: configRevision(config), payloadHash: hash(payload), payload };
 }
 export type Projection = ReturnType<typeof workerProjection>;
-export function validateProjection(value: Projection): void {
-  if (value.payload.schemaVersion !== 1 || hash(value.payload) !== value.payloadHash) throw new Error('invalid config projection');
+const milliseconds = z.number().int().positive().max(2 ** 31 - 1);
+const projectedRuntime = ConfigSchema.shape.runtime.extend({
+  heartbeatInterval:milliseconds,leaseDuration:milliseconds,interruptGrace:milliseconds,reassignGrace:milliseconds,
+  requestTimeout:milliseconds,longPollTimeout:milliseconds,configCheckInterval:milliseconds,
+  modelCatalogRefreshInterval:milliseconds,modelCatalogMaxAge:milliseconds,
+  reconnect:z.strictObject({initialDelay:milliseconds,maxDelay:milliseconds}),
+});
+const projectedUpdates = ConfigSchema.shape.updates.extend({checkInterval:milliseconds,drainTimeout:milliseconds,stabilizationWindow:milliseconds,failedVersionCooldown:milliseconds});
+const projectionSchema = z.strictObject({
+  configRevision:z.string().regex(/^[0-9a-f]{64}$/),payloadHash:z.string().regex(/^[0-9a-f]{64}$/),
+  payload:z.strictObject({
+    schemaVersion:z.literal(1),
+    github:z.strictObject({hostname:ConfigSchema.shape.github.shape.hostname,repositories:z.array(z.string().regex(/^[\w.-]+\/[\w.-]+$/))}),
+    labels:ConfigSchema.shape.labels,runtime:projectedRuntime,updates:projectedUpdates,
+    agent:ConfigSchema.shape.agent,output:ConfigSchema.shape.output,
+  }),
+});
+export function validateProjection(value: unknown): asserts value is Projection {
+  const p=projectionSchema.safeParse(value);
+  if (!p.success || hash(p.data.payload) !== p.data.payloadHash) throw new Error('invalid config projection');
+  const r=p.data.payload.runtime;
+  if(r.heartbeatInterval*3>=r.leaseDuration||r.interruptGrace>=r.reassignGrace||r.longPollTimeout>=r.requestTimeout)throw new Error('invalid config projection');
 }
 export function restartKey(c: Config): string {
   return hash([c.server.listen, c.server.port, c.server.dataDir, c.github.hostname, c.github.apiBaseUrl, c.github.tokenEnv, c.registration.tokenEnv]);

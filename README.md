@@ -24,13 +24,15 @@ npm run dev:dispatcher
 
 `/health/live`, `/health/ready`에서 상태를 확인할 수 있습니다. 설정 파일은 주기적으로 다시 읽으며, 잘못된 변경은 마지막 정상 설정을 유지합니다. Worker용 `/v1/*` API는 Worker별 인증이 필요합니다. 최초 등록에는 등록용 비밀값을 사용하며, AI·GitHub 로그인 토큰을 등록 요청에 포함하지 않습니다.
 
-Worker 진단은 로컬 Worker JSON 설정을 읽습니다. `token`에는 Dispatcher 통신용 무작위 플랫폼 토큰을 넣으며, GitHub나 AI의 로그인 토큰을 복사하지 않습니다.
+Worker 진단은 [worker.example.json](worker.example.json) 형식의 로컬 설정을 읽습니다. PC마다 새 UUID와 무작위 플랫폼 토큰을 생성해 `id`, `token`을 바꾸세요. GitHub나 AI의 로그인 토큰을 복사하지 않습니다. 사용할 엔진만 `engines`에 남깁니다.
 
 ```bash
 node packages/worker/dist/cli.js doctor --config /path/to/worker.json
 ```
 
 현재 CLI는 `doctor`를 제공합니다. 설치·백그라운드 실행·자동 업데이트 명령과 두 엔진의 실제 작업 실행은 개발 중입니다.
+
+Dispatcher의 Dockerfile도 제공합니다. 이미지에는 설정 파일과 비밀값을 넣지 않습니다. `/config/config.yaml`을 읽기 전용으로, `/data`를 쓰기 가능한 영속 볼륨으로 마운트하세요. 기본 healthcheck 포트는 설정 예제와 같은 8080입니다. Docker 이미지 빌드·컨테이너 시험은 아직 수행하지 않았습니다.
 
 ## 사용 방식
 

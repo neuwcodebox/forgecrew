@@ -5,6 +5,7 @@ import { compareVersions, resolveLabels, selectWorker } from '../packages/shared
 import { canWrite, parseControl } from '../packages/shared/src/input.ts';
 import { renderOutput, splitOutput } from '../packages/shared/src/output.ts';
 import { config, configSource, worker } from './helpers.ts';
+import { hash } from '../packages/shared/src/hash.ts';
 
 describe('central configuration',() => {
   it('parses the complete example and preserves prompt whitespace',() => {
@@ -32,6 +33,11 @@ describe('central configuration',() => {
   it('projects explicit fields only and checks payload hash',() => {
     const p=workerProjection(config()); expect(JSON.stringify(p)).not.toMatch(/tokenEnv|dataDir|FORGECREW_GITHUB_PAT|REGISTRATION/);
     validateProjection(p); p.payload.agent.instructions+='tampered'; expect(() => validateProjection(p)).toThrow();
+  });
+  it('rejects missing projection fields even when the hash was recomputed',() => {
+    const p=workerProjection(config());
+    const broken={...p,payload:{schemaVersion:1}};
+    broken.payloadHash=hash(broken.payload);expect(() => validateProjection(broken)).toThrow('invalid config projection');
   });
   it('never expands shell-like prompt text',() => {
     const c=parseConfig(configSource.replace('agent:\n  instructions: |','agent:\n  instructions: |\n    ${SECRET} $PATH $(echo unsafe)'));

@@ -1,0 +1,11 @@
+.git
+**/node_modules
+**/dist
+.local
+config.yaml
+worker.json
+.env*
+*.sqlite*
+*.db
+*.log
+coverage

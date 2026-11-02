@@ -13,14 +13,16 @@
     "build": "npm run build --workspaces --if-present",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "check": "npm run typecheck && npm test && npm run build",
+    "check": "npm run typecheck && npm test && npm run build && npm run smoke",
     "dev:dispatcher": "node --experimental-strip-types packages/dispatcher/src/main.ts",
-    "doctor": "node --experimental-strip-types packages/worker/src/cli.ts doctor"
+    "doctor": "node --experimental-strip-types packages/worker/src/cli.ts doctor",
+    "smoke": "node scripts/smoke.mjs"
   },
   "dependencies": {
     "@hono/node-server": "2.1.6",
     "@octokit/rest": "22.0.1",
     "better-sqlite3": "13.0.3",
+    "cross-spawn": "7.0.6",
     "drizzle-orm": "0.45.4",
     "hono": "4.13.16",
     "yaml": "2.9.1",
@@ -28,6 +30,7 @@
   },
   "devDependencies": {
     "@types/better-sqlite3": "9.6.0",
+    "@types/cross-spawn": "6.0.6",
     "@types/node": "24.19.2",
     "tsup": "9.0.0",
     "typescript": "7.0.2",

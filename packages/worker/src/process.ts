@@ -1,11 +1,11 @@
-import { spawn } from 'node:child_process';
+import spawn from 'cross-spawn';
 import type { ChildProcessWithoutNullStreams } from 'node:child_process';
 import { once } from 'node:events';
 
 export type CommandResult = { code: number | null; stdout: string; stderr: string };
 export function spawnProcess(executable: string, args: string[], cwd?: string): ChildProcessWithoutNullStreams {
   // No shell interpolation; retain the user's PATH, HOME, proxy and certificate settings.
-  return spawn(executable,args,{ ...(cwd ? {cwd} : {}),shell:false,windowsHide:true,detached:process.platform!=='win32',stdio:['pipe','pipe','pipe'] });
+  return spawn(executable,args,{ ...(cwd ? {cwd} : {}),shell:false,windowsHide:true,detached:process.platform!=='win32',stdio:['pipe','pipe','pipe'] }) as ChildProcessWithoutNullStreams;
 }
 export async function terminateTree(child: ChildProcessWithoutNullStreams, grace = 1000): Promise<void> {
   if (child.exitCode !== null || child.signalCode !== null) return;
@@ -33,7 +33,8 @@ export async function command(executable: string,args: string[],options: {cwd?:s
   let rejectRun: (error:Error) => void = () => {};
   let failure: Error | undefined;
   const fail=(error:Error) => { if (failure) return; failure=error; void terminateTree(child).catch(() => {}).finally(() => rejectRun(error)); };
-  const take=(chunk:Buffer,isError:boolean) => {size+=chunk.length;if(size>max) {fail(new Error('command_output_limit'));return;}if(isError)stderr+=chunk.toString('utf8');else stdout+=chunk.toString('utf8');};
+  child.stdout.setEncoding('utf8');child.stderr.setEncoding('utf8');
+  const take=(chunk:string,isError:boolean) => {size+=Buffer.byteLength(chunk);if(size>max) {fail(new Error('command_output_limit'));return;}if(isError)stderr+=chunk;else stdout+=chunk;};
   child.stdout.on('data',d => take(d,false));child.stderr.on('data',d => take(d,true));
   const timeout=setTimeout(() => fail(new Error('command_timeout')),options.timeout??15000);
   try {

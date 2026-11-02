@@ -1,0 +1,9 @@
+{
+  "schemaVersion": 1,
+  "id": "e8919df7-11e0-4009-9c19-514b09eeefdb",
+  "dispatcher": "https://dispatcher.example.internal",
+  "hostname": "github.example.internal",
+  "token": "replace-with-a-random-platform-token-before-use",
+  "maxConcurrentSessions": 2,
+  "engines": { "codex": "codex", "claude": "claude" }
+}
