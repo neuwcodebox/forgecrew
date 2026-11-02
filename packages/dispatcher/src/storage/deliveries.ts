@@ -9,6 +9,13 @@ import type { WorkerRegistry } from './workers.ts';
 import type { SessionRepository } from './sessions.ts';
 import type { Delivery, Attempt } from './types.ts';
 
+// Only the first unfinished part of a session may be reconciled or posted.
+const claimable = `d.status!='posted' AND (d.claim_until IS NULL OR d.claim_until<=?)
+  AND NOT EXISTS (
+    SELECT 1 FROM deliveries earlier
+    WHERE earlier.session_id=d.session_id AND earlier.rowid<d.rowid AND earlier.status!='posted'
+  )`;
+
 export class DeliveryRepository {
   private readonly database: StorageContext;
   private readonly workers: Pick<WorkerRegistry, 'find'>;
@@ -29,7 +36,7 @@ export class DeliveryRepository {
     const repositories = row.capabilities.repositories.map((r) => r.toLowerCase());
     const pending = this.database.sqlite
       .prepare(
-        "SELECT s.repository FROM deliveries d JOIN sessions s ON s.id=d.session_id WHERE d.status!='posted' AND (d.claim_until IS NULL OR d.claim_until<=?)",
+        `SELECT s.repository FROM deliveries d JOIN sessions s ON s.id=d.session_id WHERE ${claimable}`,
       )
       .all(this.database.now()) as { repository: string }[];
     return pending.some((d) => repositories.includes(d.repository.toLowerCase()));
@@ -42,9 +49,7 @@ export class DeliveryRepository {
         if (!c) throw new ContractError('unknown_worker', 403);
         const capabilities = c.capabilities;
         const pending = this.database.sqlite
-          .prepare(
-            "SELECT * FROM deliveries WHERE status!='posted' AND (claim_until IS NULL OR claim_until<=?) ORDER BY rowid",
-          )
+          .prepare(`SELECT d.* FROM deliveries d WHERE ${claimable} ORDER BY d.rowid`)
           .all(this.database.now()) as Delivery[];
         const d = pending.find((d) =>
           capabilities.repositories.some(

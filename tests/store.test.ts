@@ -76,6 +76,50 @@ describe('SQLite ownership, FIFO and recovery', () => {
     s.sessions.upsert(k, ['ai:enabled'], true, 1000003, 'body', 'author');
     expect(s.sqlite.prepare('SELECT COUNT(*) as n FROM inputs').get()).toEqual({ n: 1 });
   });
+  it('posts split deliveries in order within a session while allowing other sessions to progress', () => {
+    const { s, c, w } = setup();
+    const first = s.executions.claim(w.id, c)!;
+    const ids = s.executions.complete(first.attemptId, w.id, first.generation, {
+      kind: 'completed',
+      text: 'x'.repeat(100000),
+    });
+    expect(ids.length).toBeGreaterThan(1);
+    const initial = s.deliveries.claim(w.id, c.runtime.leaseDuration)!;
+    expect(initial.id).toBe(ids[0]);
+    expect(s.deliveries.hasPending(w.id)).toBe(false);
+    expect(s.deliveries.claim(w.id, c.runtime.leaseDuration)).toBeNull();
+    const otherSession = s.sessions.upsert(
+      { host: c.github.hostname, repository: 'team/project-a', kind: 'issue', number: 2 },
+      ['ai:enabled'],
+      true,
+      1000001,
+      'another request',
+      'author',
+    );
+    const other = s.executions.claim(w.id, c)!;
+    expect(other.session.id).toBe(otherSession);
+    const [otherDelivery] = s.executions.complete(other.attemptId, w.id, other.generation, {
+      kind: 'completed',
+      text: 'other answer',
+    });
+    expect(s.deliveries.claim(w.id, c.runtime.leaseDuration)?.id).toBe(otherDelivery);
+    s.deliveries.receipt(w.id, initial.id, '101');
+    expect(s.deliveries.hasPending(w.id)).toBe(true);
+    expect(s.deliveries.claim(w.id, c.runtime.leaseDuration)?.id).toBe(ids[1]);
+  });
+  it('reconciles an expired earlier delivery before claiming its following part', () => {
+    const { s, c, w, tick } = setup();
+    const claim = s.executions.claim(w.id, c)!;
+    const ids = s.executions.complete(claim.attemptId, w.id, claim.generation, {
+      kind: 'completed',
+      text: 'x'.repeat(100000),
+    });
+    const delivery = s.deliveries.claim(w.id, c.runtime.leaseDuration)!;
+    s.deliveries.beginPost(w.id, delivery.id);
+    tick(c.runtime.leaseDuration + 1);
+    expect(s.deliveries.claim(w.id, c.runtime.leaseDuration)?.id).toBe(ids[0]);
+    expect(s.deliveries.claim(w.id, c.runtime.leaseDuration)).toBeNull();
+  });
   it('rejects stale generation and expired lease results', () => {
     const { s, c, w, tick } = setup();
     const a = s.executions.claim(w.id, c)!;

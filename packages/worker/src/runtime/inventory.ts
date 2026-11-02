@@ -16,6 +16,7 @@ type InventoryOptions = {
 export class WorkerInventory {
   private readonly options: InventoryOptions;
   private capabilities: WorkerCapabilities | undefined;
+  private revision = 0;
   lastRefresh = 0;
   constructor(options: InventoryOptions) {
     this.options = options;
@@ -26,6 +27,7 @@ export class WorkerInventory {
   }
   async identify() {
     const { id, version, maxConcurrentSessions, github } = this.options;
+    ++this.revision;
     const account = await github.account();
     this.capabilities = {
       id,
@@ -47,13 +49,11 @@ export class WorkerInventory {
   }
   async refresh(projection: Projection) {
     if (!this.capabilities) return;
+    const revision = ++this.revision;
+    const current = this.capabilities;
     const { github, providers, log } = this.options,
       account = await github.account();
-    this.capabilities.githubLogin = account.login;
-    this.capabilities.githubId = String(account.id);
-    this.capabilities.repositories = await github.repositories(
-      projection.payload.github.repositories,
-    );
+    const repositories = await github.repositories(projection.payload.github.repositories);
     const models: Model[] = [];
     for (const [engine, provider] of Object.entries(providers)) {
       try {
@@ -61,23 +61,32 @@ export class WorkerInventory {
       } catch (error) {
         const reason = errorCode(error);
         models.push(
-          ...this.capabilities.models
+          ...current.models
             .filter((model) => model.engine === engine)
             .map((model) => ({ ...model, availability: providerAvailability(reason) })),
         );
         log('provider_blocked', engine + ':' + reason);
       }
     }
-    this.capabilities.models = models;
+    if (revision !== this.revision || this.capabilities !== current) return;
+    this.capabilities = {
+      ...current,
+      githubLogin: account.login,
+      githubId: String(account.id),
+      repositories,
+      models,
+    };
     this.lastRefresh = Date.now();
   }
   blockRepository(repository: string) {
+    ++this.revision;
     if (this.capabilities)
       this.capabilities.repositories = this.capabilities.repositories.filter(
         (name) => name.toLowerCase() !== repository.toLowerCase(),
       );
   }
   blockProvider(engine: Engine, reason: string) {
+    ++this.revision;
     if (this.capabilities)
       this.capabilities.models = this.capabilities.models.map((model) =>
         model.engine === engine ? { ...model, availability: providerAvailability(reason) } : model,

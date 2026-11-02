@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { mkdtemp, readFile, readdir, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
+import { setImmediate as nextEventLoop } from 'node:timers/promises';
 import { randomUUID } from 'node:crypto';
 import { Store } from '../packages/dispatcher/src/storage/index.ts';
 import { createApp } from '../packages/dispatcher/src/http/index.ts';
@@ -262,6 +263,128 @@ describe('Dispatcher and Worker integration', () => {
     await f.runtime.work();
     expect(f.provider.requests).toHaveLength(1);
     expect(f.github.posted).toHaveLength(1);
+  });
+  it('reports a terminal result even when Provider cleanup fails', async () => {
+    const f = await setup();
+    f.provider.factory = () => ({
+      result: Promise.resolve({ kind: 'completed', text: 'preserved terminal answer' }),
+      interrupt: async () => {},
+      steer: async () => {},
+      close: async () => {
+        throw new Error('process_tree_did_not_exit');
+      },
+    });
+    await f.runtime.work();
+    await Promise.all([...f.runtime.attempts.active.values()].map((attempt) => attempt.task));
+    expect(f.s.sqlite.prepare('SELECT status FROM turns').get()).toEqual({ status: 'completed' });
+    await f.runtime.work();
+    expect(f.provider.requests).toHaveLength(1);
+    expect(f.github.posted[0]?.body).toContain('preserved terminal answer');
+    expect(f.logs.some((entry) => entry.event === 'provider_cleanup_failed')).toBe(true);
+  });
+  it('waits for an interruption already in progress before shutdown completes', async () => {
+    const f = await setup(),
+      started = deferred<void>(),
+      result = deferred<Result>(),
+      closing = deferred<void>(),
+      closed = deferred<void>();
+    f.provider.factory = () => {
+      started.resolve();
+      return {
+        result: result.promise,
+        interrupt: async () => {
+          result.reject(new Error('provider_interrupted'));
+        },
+        steer: async () => {},
+        close: async () => {
+          closing.resolve();
+          await closed.promise;
+        },
+      };
+    };
+    await f.runtime.work();
+    await started.promise;
+    const active = [...f.runtime.attempts.active.values()][0]!;
+    const interrupt = f.runtime.attempts.interrupt(active, 'stop');
+    await closing.promise;
+    let finished = false;
+    const shutdown = f.runtime.attempts.stopAll().then(() => {
+      finished = true;
+    });
+    try {
+      await nextEventLoop();
+      expect(finished).toBe(false);
+    } finally {
+      closed.resolve();
+      await Promise.all([interrupt, shutdown]);
+    }
+    expect(f.s.sqlite.prepare('SELECT status FROM turns').get()).toEqual({ status: 'cancelled' });
+  });
+  it('does not release execution ownership when interrupted Provider shutdown is unconfirmed', async () => {
+    const f = await setup(),
+      started = deferred<void>(),
+      result = deferred<Result>();
+    f.provider.factory = () => {
+      started.resolve();
+      return {
+        result: result.promise,
+        interrupt: async () => {
+          result.reject(new Error('provider_interrupted'));
+        },
+        steer: async () => {},
+        close: async () => {
+          throw new Error('process_tree_did_not_exit');
+        },
+      };
+    };
+    await f.runtime.work();
+    await started.promise;
+    await expect(f.runtime.drain(0)).rejects.toThrow('provider_cleanup_unconfirmed');
+    expect(f.s.sqlite.prepare('SELECT status FROM attempts').get()).toEqual({ status: 'running' });
+    expect(f.logs.some((entry) => entry.event === 'provider_cleanup_failed')).toBe(true);
+    expect(f.s.executions.claim(f.local.id, f.configs.current)).toBeNull();
+  });
+  it('does not resurrect a blocked model or repository from an older capability refresh', async () => {
+    const f = await setup(),
+      probing = deferred<void>(),
+      catalog = deferred<ReturnType<typeof worker>['models']>();
+    f.provider.probe = () => {
+      probing.resolve();
+      return catalog.promise;
+    };
+    const refresh = f.runtime.refreshCapabilities();
+    await probing.promise;
+    f.runtime.inventory.blockProvider('codex', 'codex_rate_limited');
+    f.runtime.inventory.blockRepository(f.key.repository);
+    catalog.resolve(worker(Date.now()).models);
+    await refresh;
+    expect(f.runtime.inventory.current.repositories).not.toContain(f.key.repository);
+    expect(f.runtime.inventory.current.models[0]?.availability).toBe('rate_limited');
+  });
+  it('retains the newest capability refresh when an older probe finishes last', async () => {
+    const f = await setup(),
+      probing = deferred<void>(),
+      catalog = deferred<ReturnType<typeof worker>['models']>();
+    let probes = 0;
+    f.provider.probe = () => {
+      if (++probes === 1) {
+        probing.resolve();
+        return catalog.promise;
+      }
+      return Promise.resolve(
+        worker(Date.now()).models.map((model) => ({
+          ...model,
+          id: 'gpt-6.11-sol',
+          version: [6, 11],
+        })),
+      );
+    };
+    const older = f.runtime.refreshCapabilities();
+    await probing.promise;
+    await f.runtime.refreshCapabilities();
+    catalog.resolve(worker(Date.now()).models);
+    await older;
+    expect(f.runtime.inventory.current.models[0]?.id).toBe('gpt-6.11-sol');
   });
   it('reconciles a lost GitHub post response and publishes exactly one comment in the fixture', async () => {
     const f = await setup();

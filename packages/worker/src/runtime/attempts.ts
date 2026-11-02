@@ -20,6 +20,7 @@ type ActiveAttempt = {
   run?: ProviderRun;
   task: Promise<void>;
   reason?: InterruptReason;
+  cleanupFailed?: boolean;
 };
 type AttemptServices = {
   hostname: string;
@@ -87,7 +88,7 @@ export class AttemptRunner {
     return active.task;
   }
   async interrupt(active: ActiveAttempt, reason: InterruptReason) {
-    if (active.reason) return;
+    if (active.reason) return this.waitForExit(active);
     active.reason = reason;
     active.controller.abort();
     const forced = setTimeout(
@@ -98,10 +99,14 @@ export class AttemptRunner {
     );
     void active.run?.interrupt().catch(() => {});
     try {
-      await active.task;
+      await this.waitForExit(active);
     } finally {
       clearTimeout(forced);
     }
+  }
+  private async waitForExit(active: ActiveAttempt) {
+    await active.task;
+    if (active.cleanupFailed) throw new Error('provider_cleanup_unconfirmed');
   }
   async renew() {
     await Promise.all(
@@ -177,8 +182,15 @@ export class AttemptRunner {
         } else result = { kind: 'failed', text: 'Worker 실행 실패: ' + reason, origin: 'runtime' };
       }
     } finally {
-      await active.run?.close();
+      try {
+        await active.run?.close();
+      } catch (error) {
+        active.cleanupFailed = true;
+        log('provider_cleanup_failed', errorCode(error), { attemptId: claim.attemptId });
+      }
     }
+    // An unconfirmed shutdown must not authorize an immediate replacement execution.
+    if (active.reason && active.cleanupFailed) return;
     const identity = this.identity(claim);
     if (active.reason === 'steer') return;
     if (active.reason === 'stop') {
