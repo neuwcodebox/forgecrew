@@ -3,5 +3,5 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "scripts": { "build": "tsup src/main.ts --config ../../tsup.config.ts --out-dir dist --external better-sqlite3", "start": "node dist/main.js" }
+  "scripts": { "build": "tsdown src/main.ts --config ../../tsdown.config.ts --out-dir dist", "start": "node dist/main.js" }
 }

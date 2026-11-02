@@ -16,7 +16,7 @@
 | Codex | 로컬 `codex app-server`, JSON-RPC/stdio |
 | Claude | 공식 `claude -p`, 구조화된 JSON 스트림과 명시적 세션 ID |
 | Worker 제어 통신 | Worker가 시작하는 HTTP 요청·long polling |
-| 빌드·시험 | TypeScript 검사, JS 번들, Vitest, Windows/Linux 통합 시험 |
+| 빌드·시험 | TypeScript 검사, tsdown JS 번들, Vitest, Windows/Linux 통합 시험 |
 | 배포 | Dispatcher Docker 이미지, Worker 사내 npm 패키지 |
 
 Node.js에서 Hono를 구동하고 Drizzle로 SQLite를 사용하는 경로는 공식 지원 구성을 사용한다.[S16][S17] 정확한 의존성 버전과 Node `engines` 범위는 P1에서 고정하고 lockfile을 커밋한다. SQLite 네이티브 드라이버는 Dispatcher에만 포함한다. Worker 패키지는 빌드된 JS와 필요한 런타임 의존성만 담고 Node.js·개발 도구체인·AI 실행 파일을 동봉하지 않는다. Worker production 의존성은 번들하거나 재현 가능한 고정 배포로 관리한다.

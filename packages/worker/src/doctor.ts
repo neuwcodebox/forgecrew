@@ -9,7 +9,10 @@ export async function doctor(config:LocalConfig):Promise<Diagnostic[]> {
     try {checks.push({component,status:'ok',detail:await run()});}
     catch {checks.push({component,status:'blocked',detail:'실행 파일·호스트별 로그인·지원 버전을 확인하세요.'});}
   };
-  await check('node',async () => {if(Number(process.versions.node.split('.')[0])!==24)throw new Error('node_version');return process.versions.node;});
+  await check('node',async () => {
+    const [major,minor]=process.versions.node.split('.').map(Number);
+    if(major!==24||(minor??0)<11)throw new Error('node_version');return process.versions.node;
+  });
   await check('git',async () => {const r=await command('git',['--version']);if(r.code!==0)throw new Error();return r.stdout.trim();});
   await check('github',async () => {
     const r=await command('gh',['api','--hostname',config.hostname,'user','--jq','{login: .login, id: .id}']);

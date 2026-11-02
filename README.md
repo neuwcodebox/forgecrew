@@ -8,7 +8,7 @@ ForgeCrew는 사내 GitHub Enterprise Server의 Issue와 Pull Request를 AI 대�
 
 ## 개발 환경에서 실행
 
-Node.js 24 LTS와 npm을 사용합니다. 의존성 버전은 `package-lock.json`으로 고정합니다.
+Node.js 24.11 이상(24 LTS 계열)과 npm을 사용합니다. TypeScript 검사와 tsdown 번들 빌드를 사용하며 의존성 버전은 `package-lock.json`으로 고정합니다.
 
 ```bash
 npm ci

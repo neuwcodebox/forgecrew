@@ -13,5 +13,5 @@
     "skipLibCheck": true,
     "types": ["node"]
   },
-  "include": ["packages/**/*.ts", "tests/**/*.ts", "tsup.config.ts"]
+  "include": ["packages/**/*.ts", "tests/**/*.ts", "tsdown.config.ts"]
 }

@@ -6,7 +6,7 @@ COPY packages/shared/package.json packages/shared/package.json
 COPY packages/dispatcher/package.json packages/dispatcher/package.json
 COPY packages/worker/package.json packages/worker/package.json
 RUN npm ci
-COPY tsconfig.json tsup.config.ts ./
+COPY tsconfig.json tsdown.config.ts ./
 COPY packages ./packages
 RUN npm run build && npm prune --omit=dev
 
