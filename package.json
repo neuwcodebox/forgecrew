@@ -16,7 +16,9 @@
     "check": "npm run typecheck && npm test && npm run build && npm run smoke",
     "dev:dispatcher": "node --experimental-strip-types packages/dispatcher/src/main.ts",
     "doctor": "node --experimental-strip-types packages/worker/src/cli.ts doctor",
-    "smoke": "node scripts/smoke.mjs && node --experimental-strip-types scripts/package-smoke.mjs && node --experimental-strip-types scripts/update-smoke.mjs"
+    "smoke": "node scripts/smoke.mjs && node --experimental-strip-types scripts/package-smoke.mjs && node --experimental-strip-types scripts/update-smoke.mjs",
+    "format": "prettier --write \"packages/**/*.{ts,mjs}\" \"tests/**/*.{ts,cjs}\" \"scripts/*.mjs\" tsdown.config.ts",
+    "format:check": "prettier --check \"packages/**/*.{ts,mjs}\" \"tests/**/*.{ts,cjs}\" \"scripts/*.mjs\" tsdown.config.ts"
   },
   "dependencies": {
     "@hono/node-server": "2.1.6",
@@ -32,6 +34,7 @@
     "@types/better-sqlite3": "9.6.0",
     "@types/cross-spawn": "6.0.6",
     "@types/node": "24.19.2",
+    "prettier": "3.9.10",
     "tsdown": "0.23.4",
     "typescript": "7.0.2",
     "vitest": "5.0.5"

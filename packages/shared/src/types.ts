@@ -1,7 +1,7 @@
 export const families = ['sol', 'terra', 'opus', 'sonnet'] as const;
 export const efforts = ['low', 'medium', 'high', 'xhigh'] as const;
-export type Family = typeof families[number];
-export type Effort = typeof efforts[number];
+export type Family = (typeof families)[number];
+export type Effort = (typeof efforts)[number];
 export type Engine = 'codex' | 'claude';
 export type Model = {
   family: Family;
@@ -25,14 +25,28 @@ export type WorkerCapabilities = {
   repositories: string[];
   models: Model[];
   draining: boolean;
-  configRevision?:string|undefined;
+  configRevision?: string | undefined;
 };
-export type SessionKey = { host: string; repository: string; kind: 'issue' | 'pull'; number: number };
+export type SessionKey = {
+  host: string;
+  repository: string;
+  kind: 'issue' | 'pull';
+  number: number;
+};
 export type Control = { kind: 'stop' } | { kind: 'steer'; text: string };
-export type Result = { kind: 'completed' | 'needs_reply' | 'failed'; text: string; links?: string[] | undefined;origin?:'ai'|'runtime'|undefined };
+export type Result = {
+  kind: 'completed' | 'needs_reply' | 'failed';
+  text: string;
+  links?: string[] | undefined;
+  origin?: 'ai' | 'runtime' | undefined;
+};
 
 export class ContractError extends Error {
   readonly code: string;
   readonly status: number;
-  constructor(code: string, status = 409) { super(code); this.code = code; this.status = status; }
+  constructor(code: string, status = 409) {
+    super(code);
+    this.code = code;
+    this.status = status;
+  }
 }
