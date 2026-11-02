@@ -5,8 +5,9 @@ import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { Store } from '../packages/dispatcher/src/storage/index.ts';
 import { config, worker } from './helpers.ts';
-import { CodexProvider } from '../packages/worker/src/providers/codex.ts';
-import { ClaudeProvider, claudeModel } from '../packages/worker/src/providers/claude.ts';
+import { CodexProvider } from '../packages/worker/src/providers/codex/index.ts';
+import { ClaudeProvider } from '../packages/worker/src/providers/claude/index.ts';
+import { claudeModel } from '../packages/worker/src/providers/claude/catalog.ts';
 import type { RunRequest } from '../packages/worker/src/providers/types.ts';
 
 const directories: string[] = [];
@@ -151,6 +152,20 @@ describe('Claude official stream-json process protocol', () => {
     expect(sent.findIndex((m) => m.request?.subtype === 'get_settings')).toBeLessThan(
       sent.findIndex((m) => m.type === 'user'),
     );
+  });
+  it('rejects an invalid session identity without persisting it or accepting the answer', async () => {
+    const fixtureProcess = await fixture('claude-invalid-session');
+    const sessions: unknown[] = [];
+    fixtureProcess.request.onSession = async (session) => {
+      sessions.push(session);
+    };
+    const run = new ClaudeProvider(fixtureProcess.executable).run(fixtureProcess.request);
+    try {
+      await expect(run.result).rejects.toThrow('claude_invalid_session');
+      expect(sessions).toEqual([]);
+    } finally {
+      await run.close();
+    }
   });
   it('reports native authentication errors without treating them as an AI answer', async () => {
     const f = await fixture('claude-auth-error'),

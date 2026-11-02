@@ -1,4 +1,4 @@
-import type { Config } from './config.ts';
+import type { Config } from './config/index.ts';
 import type { Effort, Family, Model, WorkerCapabilities } from './types.ts';
 import { efforts, families, ContractError } from './types.ts';
 

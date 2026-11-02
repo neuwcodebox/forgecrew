@@ -6,7 +6,7 @@ import {
   parseConfig,
   validateProjection,
   workerProjection,
-} from '../packages/shared/src/config.ts';
+} from '../packages/shared/src/config/index.ts';
 import { compareVersions, resolveLabels, selectWorker } from '../packages/shared/src/models.ts';
 import { canWrite, parseControl } from '../packages/shared/src/input.ts';
 import { renderOutput, splitOutput } from '../packages/shared/src/output.ts';

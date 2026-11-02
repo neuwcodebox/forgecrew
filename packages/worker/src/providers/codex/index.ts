@@ -1,47 +1,14 @@
-import { workerVersion } from '../version.ts';
-import { RpcClient } from '../rpc.ts';
-import type { RpcNotification } from '../rpc.ts';
-import { command, spawnProcess } from '../process.ts';
-import { efforts } from '../../../shared/src/types.ts';
-import type { Effort, Model, Result } from '../../../shared/src/types.ts';
-import { instructions, userInput } from './types.ts';
-import type { Provider, ProviderRun, RunRequest } from './types.ts';
+import { workerVersion } from '../../version.ts';
+import { RpcClient } from '../../rpc.ts';
+import type { RpcNotification } from '../../rpc.ts';
+import { command, spawnProcess } from '../../process.ts';
+import type { Model, Result } from '../../../../shared/src/types.ts';
+import { instructions, userInput } from '../types.ts';
+import type { Provider, ProviderRun, RunRequest } from '../types.ts';
+import { codexModel } from './catalog.ts';
+import type { CatalogEntry } from './catalog.ts';
+import type { Opened, NotificationParams } from './protocol.ts';
 
-type CatalogEntry = {
-  model: string;
-  defaultReasoningEffort: string;
-  supportedReasoningEfforts: { reasoningEffort: string }[];
-};
-type Opened = {
-  thread: { id: string };
-  model: string;
-  approvalsReviewer: string;
-  approvalPolicy: unknown;
-  sandbox: { type: string };
-  reasoningEffort?: string | null;
-};
-export function codexModel(entry: CatalogEntry, runtimeVersion: string, now: number): Model | null {
-  const family = /(?:^|[-_])(sol|terra)(?:$|[-_])/.exec(entry.model)?.[1] as
-    'sol' | 'terra' | undefined;
-  const version = /\d+(?:\.\d+)*/.exec(entry.model)?.[0].split('.').map(Number);
-  if (!family || !version) return null;
-  return {
-    family,
-    id: entry.model,
-    version,
-    engine: 'codex',
-    efforts: entry.supportedReasoningEfforts
-      .map((e) => e.reasoningEffort)
-      .filter((e): e is Effort => efforts.includes(e as Effort)),
-    defaultEffort: efforts.includes(entry.defaultReasoningEffort as Effort)
-      ? (entry.defaultReasoningEffort as Effort)
-      : null,
-    autoReview: true,
-    availability: 'ready',
-    observedAt: now,
-    runtimeVersion,
-  };
-}
 export class CodexProvider implements Provider {
   readonly executable: string;
   constructor(executable: string) {
@@ -139,7 +106,7 @@ export class CodexProvider implements Provider {
       if (threadId && turnId) await rpc.request('turn/interrupt', { threadId, turnId });
     };
     const handle = (event: RpcNotification) => {
-      const p = event.params as Record<string, any>;
+      const p = event.params as NotificationParams;
       if (threadId && p.threadId && p.threadId !== threadId) return;
       if (event.method === 'turn/started') turnId = p.turn?.id;
       if (
@@ -173,7 +140,7 @@ export class CodexProvider implements Provider {
           const error = p.turn?.error?.codexErrorInfo;
           fail(
             new Error(
-              ['usageLimitExceeded', 'rateLimitExceeded'].includes(error)
+              error === 'usageLimitExceeded' || error === 'rateLimitExceeded'
                 ? 'codex_rate_limited'
                 : error === 'unauthorized'
                   ? 'codex_auth_required'

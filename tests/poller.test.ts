@@ -1,7 +1,8 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { Store } from '../packages/dispatcher/src/storage/index.ts';
-import { Poller, GitHubClient } from '../packages/dispatcher/src/github.ts';
-import type { GitHubSource } from '../packages/dispatcher/src/github.ts';
+import { GitHubClient } from '../packages/dispatcher/src/github/client.ts';
+import { Poller } from '../packages/dispatcher/src/github/poller.ts';
+import type { GitHubSource } from '../packages/dispatcher/src/github/contracts.ts';
 import { config, worker } from './helpers.ts';
 import { sessionId } from '../packages/shared/src/hash.ts';
 

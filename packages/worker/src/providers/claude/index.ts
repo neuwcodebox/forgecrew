@@ -1,116 +1,14 @@
-import { createInterface } from 'node:readline';
-import { EventEmitter } from 'node:events';
-import { randomUUID } from 'node:crypto';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { command, spawnProcess, terminateTree } from '../process.ts';
-import type { ChildProcessWithoutNullStreams } from 'node:child_process';
-import { efforts } from '../../../shared/src/types.ts';
-import type { Effort, Model, Result } from '../../../shared/src/types.ts';
-import { instructions, userInput } from './types.ts';
-import type { Provider, ProviderRun, RunRequest } from './types.ts';
+import { command, spawnProcess } from '../../process.ts';
+import type { Model, Result } from '../../../../shared/src/types.ts';
+import { instructions, userInput } from '../types.ts';
+import type { Provider, ProviderRun, RunRequest } from '../types.ts';
+import { ClaudeStream } from './stream.ts';
+import { claudeModel } from './catalog.ts';
+import type { ClaudeModelInfo } from './catalog.ts';
 
-type ClaudeModelInfo = {
-  value: string;
-  resolvedModel?: string;
-  supportedEffortLevels?: string[];
-  supportsAutoMode?: boolean;
-};
-export class ClaudeStream extends EventEmitter {
-  readonly child: ChildProcessWithoutNullStreams;
-  private pending = new Map<
-    string,
-    { resolve: (r: any) => void; reject: (e: Error) => void; timer: ReturnType<typeof setTimeout> }
-  >();
-  constructor(child: ChildProcessWithoutNullStreams) {
-    super();
-    this.child = child;
-    child.stderr.resume();
-    child.stdin.on('error', () => {});
-    const lines = createInterface({ input: child.stdout });
-    const fail = () => {
-      for (const p of this.pending.values()) {
-        clearTimeout(p.timer);
-        p.reject(new Error('claude_stream_closed'));
-      }
-      this.pending.clear();
-      this.emit('closed');
-    };
-    child.on('error', fail);
-    child.on('close', () => {
-      lines.close();
-      fail();
-    });
-    lines.on('line', (line) => {
-      try {
-        if (line.length > 8 * 1024 * 1024) throw new Error('large_message');
-        const message = JSON.parse(line);
-        if (message.type === 'control_response') {
-          const r = message.response;
-          const pending = this.pending.get(r.request_id);
-          if (!pending) return;
-          this.pending.delete(r.request_id);
-          clearTimeout(pending.timer);
-          if (r.subtype === 'error') pending.reject(new Error('claude_control_rejected'));
-          else pending.resolve(r.response);
-        } else if (message.type === 'control_request') {
-          this.send({
-            type: 'control_response',
-            response: {
-              subtype: 'error',
-              request_id: message.request_id,
-              error: 'No human response is available.',
-            },
-          });
-          this.emit('unattended_request');
-        } else this.emit('message', message);
-      } catch {
-        this.emit('invalid_message');
-      }
-    });
-  }
-  send(value: unknown) {
-    this.child.stdin.write(JSON.stringify(value) + '\n');
-  }
-  control<T = any>(request: Record<string, unknown>): Promise<T> {
-    const request_id = randomUUID();
-    return new Promise<T>((resolve, reject) => {
-      const timer = setTimeout(() => {
-        this.pending.delete(request_id);
-        reject(new Error('claude_control_timeout'));
-      }, 15000);
-      this.pending.set(request_id, { resolve, reject, timer });
-      this.send({ type: 'control_request', request_id, request });
-    });
-  }
-  async close() {
-    await terminateTree(this.child);
-  }
-}
-export function claudeModel(
-  info: ClaudeModelInfo,
-  runtimeVersion: string,
-  now: number,
-): Model | null {
-  const id = info.resolvedModel ?? info.value;
-  const match = /^claude-(opus|sonnet)-(\d+)(?:[.-](\d+))?(?:$|[-[])/.exec(id);
-  if (!match || info.supportsAutoMode !== true) return null;
-  return {
-    family: match[1] as 'opus' | 'sonnet',
-    id,
-    version: [Number(match[2]), Number(match[3] ?? 0)],
-    engine: 'claude',
-    efforts: (info.supportedEffortLevels ?? []).filter((e): e is Effort =>
-      efforts.includes(e as Effort),
-    ),
-    defaultEffort: null,
-    autoReview: true,
-    availability: 'ready',
-    observedAt: now,
-    runtimeVersion,
-  };
-}
 export class ClaudeProvider implements Provider {
   readonly executable: string;
   constructor(executable: string) {
@@ -142,8 +40,8 @@ export class ClaudeProvider implements Provider {
   async probe(): Promise<Model[]> {
     const auth = await command(this.executable, ['auth', 'status']);
     if (auth.code !== 0) throw new Error('claude_auth_required');
-    const status = JSON.parse(auth.stdout);
-    if (!status.loggedIn || !['claude.ai', 'oauth_token'].includes(status.authMethod))
+    const status = JSON.parse(auth.stdout) as { loggedIn?: boolean; authMethod?: string };
+    if (!status.loggedIn || !['claude.ai', 'oauth_token'].includes(status.authMethod ?? ''))
       throw new Error('claude_subscription_login_required');
     const stream = this.open();
     try {
@@ -211,8 +109,14 @@ export class ClaudeProvider implements Provider {
         fail(new Error('claude_unattended_request'));
         void interrupt().catch(() => {});
       });
-      stream.on('message', (message: any) => {
+      stream.on('message', (message) => {
         if (message.type === 'system' && message.subtype === 'init') {
+          const sessionId = message.session_id;
+          if (typeof sessionId !== 'string' || !sessionId) {
+            fail(new Error('claude_invalid_session'));
+            void interrupt().catch(() => {});
+            return;
+          }
           if (
             message.model !== request.claim.runConfig.model ||
             message.permissionMode !== 'auto'
@@ -223,7 +127,7 @@ export class ClaudeProvider implements Provider {
           }
           sessionSaved = sessionSaved.then(() =>
             request.onSession({
-              id: message.session_id,
+              id: sessionId,
               engine: 'claude',
               workspace: request.workspace,
             }),
@@ -263,11 +167,12 @@ export class ClaudeProvider implements Provider {
             fail(new Error('claude_turn_failed'));
             return;
           }
+          const text = message.result;
           void sessionSaved.then(
             () => {
               if (!settled) {
                 settled = true;
-                resolveResult({ kind: 'completed', text: message.result });
+                resolveResult({ kind: 'completed', text });
               }
             },
             () => fail(new Error('claude_session_persistence_failed')),

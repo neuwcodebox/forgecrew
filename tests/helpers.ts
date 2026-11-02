@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
-import { parseConfig } from '../packages/shared/src/config.ts';
+import { parseConfig } from '../packages/shared/src/config/index.ts';
 import type { WorkerCapabilities } from '../packages/shared/src/types.ts';
 
 export const configSource = readFileSync(

@@ -2,57 +2,21 @@ import { Hono } from 'hono';
 import { setTimeout as delay } from 'node:timers/promises';
 import { bodyLimit } from 'hono/body-limit';
 import { z } from 'zod';
-import { configRevision, workerProjection } from '../../shared/src/config.ts';
-import type { ConfigManager } from '../../shared/src/config.ts';
-import { secretEqual } from '../../shared/src/hash.ts';
-import { ContractError, efforts, families } from '../../shared/src/types.ts';
-import type { Store } from './storage/index.ts';
-import type { Preflight } from './storage/index.ts';
-import type { WorkClaim } from '../../shared/src/protocol.ts';
+import { configRevision, workerProjection } from '../../../shared/src/config/index.ts';
+import type { ConfigManager } from '../../../shared/src/config/index.ts';
+import { secretEqual } from '../../../shared/src/hash.ts';
+import { ContractError } from '../../../shared/src/types.ts';
+import type { Store } from '../storage/index.ts';
+import type { Preflight } from '../storage/index.ts';
+import type { WorkClaim } from '../../../shared/src/protocol.ts';
 
-const model = z.strictObject({
-  family: z.enum(families),
-  id: z.string().min(1).max(200),
-  version: z.array(z.number().int().nonnegative()).min(1).max(8),
-  efforts: z.array(z.enum(efforts)),
-  defaultEffort: z.enum(efforts).nullable(),
-  engine: z.enum(['codex', 'claude']),
-  autoReview: z.boolean(),
-  availability: z.enum(['ready', 'auth_required', 'rate_limited', 'unavailable']),
-  observedAt: z.number().int().nonnegative(),
-  runtimeVersion: z.string().max(100),
-});
-export const capabilitiesSchema = z.strictObject({
-  id: z.string().uuid(),
-  githubLogin: z.string().min(1).max(100),
-  githubId: z.string().regex(/^\d+$/),
-  version: z.string().min(1).max(100),
-  schemaVersions: z.array(z.number().int().positive()).max(10),
-  maxConcurrentSessions: z.number().int().min(1).max(100),
-  repositories: z.array(z.string().regex(/^[\w.-]+\/[\w.-]+$/)).max(1000),
-  models: z.array(model).max(1000),
-  draining: z.boolean(),
-  configRevision: z
-    .string()
-    .regex(/^[0-9a-f]{64}$/)
-    .optional(),
-});
-const identity = z.strictObject({
-  attemptId: z.string().uuid(),
-  generation: z.number().int().positive(),
-});
-const completed = identity.extend({
-  result: z.strictObject({
-    kind: z.enum(['completed', 'needs_reply', 'failed']),
-    text: z.string().min(1).max(2000000),
-    links: z.array(z.url()).max(100).optional(),
-    origin: z.enum(['ai', 'runtime']).optional(),
-  }),
-});
+import { capabilitiesSchema, attemptIdentity, completedRequest } from './schemas.ts';
+
+type HttpStorage = Pick<Store, 'workers' | 'diagnostics' | 'configs' | 'executions' | 'deliveries'>;
 
 export function createApp(
-  store: Store,
-  configs: ConfigManager,
+  store: HttpStorage,
+  configs: Pick<ConfigManager, 'current' | 'lastError'>,
   registrationToken: string,
   verifyInput?: (claim: WorkClaim) => Promise<Preflight>,
 ) {
@@ -141,31 +105,41 @@ export function createApp(
     return c.json({ claim });
   });
   app.post('/v1/renew', async (c) => {
-    const r = identity.parse(await c.req.json());
-    return c.json(store.executions.renew(r.attemptId, c.get('worker'), r.generation));
+    const request = attemptIdentity.parse(await c.req.json());
+    return c.json(store.executions.renew(request.attemptId, c.get('worker'), request.generation));
   });
   app.post('/v1/complete', async (c) => {
-    const r = completed.parse(await c.req.json());
+    const request = completedRequest.parse(await c.req.json());
     return c.json({
-      deliveries: store.executions.complete(r.attemptId, c.get('worker'), r.generation, r.result),
+      deliveries: store.executions.complete(
+        request.attemptId,
+        c.get('worker'),
+        request.generation,
+        request.result,
+      ),
     });
   });
   app.post('/v1/cancel', async (c) => {
-    const r = identity.parse(await c.req.json());
-    store.executions.cancel(r.attemptId, c.get('worker'), r.generation);
+    const request = attemptIdentity.parse(await c.req.json());
+    store.executions.cancel(request.attemptId, c.get('worker'), request.generation);
     return c.json({ ok: true });
   });
   app.post('/v1/release', async (c) => {
-    const r = identity.parse(await c.req.json());
-    store.executions.release(r.attemptId, c.get('worker'), r.generation);
+    const request = attemptIdentity.parse(await c.req.json());
+    store.executions.release(request.attemptId, c.get('worker'), request.generation);
     return c.json({ ok: true });
   });
   app.post('/v1/steer-restart', async (c) => {
-    const r = identity
+    const request = attemptIdentity
       .extend({ controlId: z.string().regex(/^[0-9a-f]{64}$/) })
       .parse(await c.req.json());
     return c.json({
-      claim: store.executions.restartSteer(r.attemptId, c.get('worker'), r.generation, r.controlId),
+      claim: store.executions.restartSteer(
+        request.attemptId,
+        c.get('worker'),
+        request.generation,
+        request.controlId,
+      ),
     });
   });
   app.post('/v1/controls/:id/ack', (c) => {
@@ -185,8 +159,10 @@ export function createApp(
     return c.json({ ok: true });
   });
   app.post('/v1/deliveries/:id/receipt', async (c) => {
-    const r = z.strictObject({ githubId: z.string().regex(/^\d+$/) }).parse(await c.req.json());
-    store.deliveries.receipt(c.get('worker'), c.req.param('id'), r.githubId);
+    const request = z
+      .strictObject({ githubId: z.string().regex(/^\d+$/) })
+      .parse(await c.req.json());
+    store.deliveries.receipt(c.get('worker'), c.req.param('id'), request.githubId);
     return c.json({ ok: true });
   });
   return app;

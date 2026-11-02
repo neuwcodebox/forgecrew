@@ -2,8 +2,8 @@ import type { StorageContext } from './database.ts';
 import { drizzle } from 'drizzle-orm/better-sqlite3';
 import { eq } from 'drizzle-orm';
 import { configSnapshots } from './schema.ts';
-import { configRevision } from '../../../shared/src/config.ts';
-import type { Config } from '../../../shared/src/config.ts';
+import { configRevision } from '../../../shared/src/config/index.ts';
+import type { Config } from '../../../shared/src/config/index.ts';
 import { ContractError } from '../../../shared/src/types.ts';
 
 export class ConfigSnapshots {

@@ -10,7 +10,7 @@ import {
   readProjection,
   writeResult,
 } from '../packages/worker/src/local.ts';
-import { workerProjection } from '../packages/shared/src/config.ts';
+import { workerProjection } from '../packages/shared/src/config/index.ts';
 import { config } from './helpers.ts';
 
 const directories: string[] = [];

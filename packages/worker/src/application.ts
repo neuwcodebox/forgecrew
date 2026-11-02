@@ -2,8 +2,8 @@ import type { LocalConfig } from './local.ts';
 import { DispatcherClient } from './dispatcher/client.ts';
 import { GhClient } from './github/client.ts';
 import { GitWorkspaces } from './github/workspaces.ts';
-import { CodexProvider } from './providers/codex.ts';
-import { ClaudeProvider } from './providers/claude.ts';
+import { CodexProvider } from './providers/codex/index.ts';
+import { ClaudeProvider } from './providers/claude/index.ts';
 import { WorkerRuntime } from './runtime/index.ts';
 import { workerVersion } from './version.ts';
 

@@ -13,7 +13,7 @@
     "build": "npm run build --workspaces --if-present",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "check": "npm run typecheck && npm test && npm run build && npm run smoke",
+    "check": "npm run format:check && npm run typecheck && npm test && npm run build && npm run smoke",
     "dev:dispatcher": "node --experimental-strip-types packages/dispatcher/src/main.ts",
     "doctor": "node --experimental-strip-types packages/worker/src/cli.ts doctor",
     "smoke": "node scripts/smoke.mjs && node --experimental-strip-types scripts/package-smoke.mjs && node --experimental-strip-types scripts/update-smoke.mjs",

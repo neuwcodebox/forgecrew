@@ -3,8 +3,8 @@ import { Store } from '../packages/dispatcher/src/storage/index.ts';
 import { config, worker } from './helpers.ts';
 import type { WorkerCapabilities } from '../packages/shared/src/types.ts';
 import { hash } from '../packages/shared/src/hash.ts';
-import { ConfigManager } from '../packages/shared/src/config.ts';
-import { createApp } from '../packages/dispatcher/src/api.ts';
+import { ConfigManager } from '../packages/shared/src/config/index.ts';
+import { createApp } from '../packages/dispatcher/src/http/index.ts';
 import { configSource } from './helpers.ts';
 
 const stores: Store[] = [];
@@ -230,7 +230,7 @@ describe('SQLite ownership, FIFO and recovery', () => {
   });
   it('never resurrects a stopped attempt after its lease expires', () => {
     const { s, c, w, id, tick, refresh } = setup();
-    const a = s.executions.claim(w.id, c)!;
+    s.executions.claim(w.id, c);
     s.executions.addControl(id, '42', { kind: 'stop' }, 1000000);
     tick(c.runtime.leaseDuration + c.runtime.reassignGrace + 1);
     refresh();

@@ -4,8 +4,8 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { randomUUID } from 'node:crypto';
 import { Store } from '../packages/dispatcher/src/storage/index.ts';
-import { createApp } from '../packages/dispatcher/src/api.ts';
-import { ConfigManager } from '../packages/shared/src/config.ts';
+import { createApp } from '../packages/dispatcher/src/http/index.ts';
+import { ConfigManager } from '../packages/shared/src/config/index.ts';
 import { configSource, worker } from './helpers.ts';
 import { DispatcherClient } from '../packages/worker/src/dispatcher/client.ts';
 import { WorkerRuntime } from '../packages/worker/src/runtime/index.ts';
@@ -37,7 +37,7 @@ class FakeGithub implements GitHubGateway, Workspaces {
   accountId = 123;
   accountLogin = 'coworker';
   readonly dir: string;
-  constructor(host: string, dir: string) {
+  constructor(dir: string) {
     this.dir = dir;
   }
   async account() {
@@ -160,7 +160,7 @@ async function setup(
       version: [5, 5],
     },
   ];
-  const github = new FakeGithub(local.hostname, dir);
+  const github = new FakeGithub(dir);
   const logs: Record<string, unknown>[] = [];
   const runtime = new WorkerRuntime(local, dir, {
     logger: (r) => logs.push(r),
@@ -192,7 +192,7 @@ async function setup(
   const peer = async () => {
     const peerLocal = { ...local, id: randomUUID(), token: 'p'.repeat(48) },
       peerDir = join(dir, 'peer'),
-      peerGithub = new FakeGithub(local.hostname, peerDir),
+      peerGithub = new FakeGithub(peerDir),
       peerProvider = new FakeProvider();
     peerGithub.accountId = 456;
     peerGithub.accountLogin = 'peer';
@@ -313,7 +313,7 @@ describe('Dispatcher and Worker integration', () => {
       second = deferred<void>(),
       pending = deferred<Result>();
     let count = 0;
-    f.provider.factory = (r) => {
+    f.provider.factory = () => {
       if (++count === 1) {
         first.resolve();
         return {

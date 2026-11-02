@@ -3,8 +3,8 @@ import { dirname, join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import { hash } from '../../shared/src/hash.ts';
-import { validateProjection } from '../../shared/src/config.ts';
-import type { Projection } from '../../shared/src/config.ts';
+import { validateProjection } from '../../shared/src/config/index.ts';
+import type { Projection } from '../../shared/src/config/index.ts';
 
 export const LocalConfigSchema = z.strictObject({
   schemaVersion: z.literal(1),

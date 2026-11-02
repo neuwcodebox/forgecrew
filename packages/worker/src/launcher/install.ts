@@ -3,7 +3,7 @@ import { join, dirname } from 'node:path';
 import { createHash } from 'node:crypto';
 import { atomicWrite } from '../local.ts';
 import { command } from '../process.ts';
-import type { Projection } from '../../../shared/src/config.ts';
+import type { Projection } from '../../../shared/src/config/index.ts';
 import { installedVersion } from './state.ts';
 import type { InstalledVersion } from './state.ts';
 

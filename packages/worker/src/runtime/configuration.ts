@@ -1,5 +1,5 @@
-import type { Projection } from '../../../shared/src/config.ts';
-import { validateProjection } from '../../../shared/src/config.ts';
+import type { Projection } from '../../../shared/src/config/index.ts';
+import { validateProjection } from '../../../shared/src/config/index.ts';
 import type { Dispatcher } from '../dispatcher/protocol.ts';
 import { cacheProjection, readLatestProjection } from '../local.ts';
 

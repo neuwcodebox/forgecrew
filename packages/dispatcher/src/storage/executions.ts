@@ -1,7 +1,7 @@
 import type { StorageContext } from './database.ts';
 import { randomUUID } from 'node:crypto';
-import { workerProjection } from '../../../shared/src/config.ts';
-import type { Config } from '../../../shared/src/config.ts';
+import { workerProjection } from '../../../shared/src/config/index.ts';
+import type { Config } from '../../../shared/src/config/index.ts';
 import { hash } from '../../../shared/src/hash.ts';
 import { ContractError } from '../../../shared/src/types.ts';
 import type { Control, Result } from '../../../shared/src/types.ts';

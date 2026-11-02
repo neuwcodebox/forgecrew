@@ -1,4 +1,4 @@
-import type { Projection } from '../../../shared/src/config.ts';
+import type { Projection } from '../../../shared/src/config/index.ts';
 import type { Engine, Model, WorkerCapabilities } from '../../../shared/src/types.ts';
 import type { GitHubAccess } from '../github/contracts.ts';
 import type { Provider } from '../providers/types.ts';

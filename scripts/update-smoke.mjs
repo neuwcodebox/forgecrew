@@ -5,7 +5,7 @@ import { join, resolve, delimiter } from 'node:path';
 import { tmpdir } from 'node:os';
 import { randomUUID, createHash } from 'node:crypto';
 import assert from 'node:assert/strict';
-import { parseConfig, workerProjection } from '../packages/shared/src/config.ts';
+import { parseConfig, workerProjection } from '../packages/shared/src/config/index.ts';
 import { command } from '../packages/worker/src/process.ts';
 import { prepareLauncher } from '../packages/worker/src/launcher/install.ts';
 import {

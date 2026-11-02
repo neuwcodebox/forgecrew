@@ -1,6 +1,6 @@
 import { mkdir } from 'node:fs/promises';
 import { setTimeout as delay } from 'node:timers/promises';
-import type { Projection } from '../../../shared/src/config.ts';
+import type { Projection } from '../../../shared/src/config/index.ts';
 import type { Engine } from '../../../shared/src/types.ts';
 import type { LocalConfig } from '../local.ts';
 import type { Dispatcher, HeartbeatResponse } from '../dispatcher/protocol.ts';

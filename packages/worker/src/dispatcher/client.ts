@@ -1,5 +1,5 @@
 import type { LocalConfig } from '../local.ts';
-import type { Projection } from '../../../shared/src/config.ts';
+import type { Projection } from '../../../shared/src/config/index.ts';
 import type { Result, WorkerCapabilities } from '../../../shared/src/types.ts';
 import type { DeliveryClaim, WorkClaim } from '../../../shared/src/protocol.ts';
 import { DispatcherError } from './protocol.ts';

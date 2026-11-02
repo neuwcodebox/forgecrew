@@ -1,10 +1,11 @@
 import { mkdir, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { serve } from '@hono/node-server';
-import { ConfigManager, parseConfig } from '../../shared/src/config.ts';
+import { ConfigManager, parseConfig } from '../../shared/src/config/index.ts';
 import { Store } from './storage/index.ts';
-import { createApp } from './api.ts';
-import { GitHubClient, Poller } from './github.ts';
+import { createApp } from './http/index.ts';
+import { GitHubClient } from './github/client.ts';
+import { Poller } from './github/poller.ts';
 
 const configPath = process.env.FORGECREW_CONFIG ?? 'config.yaml';
 async function main() {

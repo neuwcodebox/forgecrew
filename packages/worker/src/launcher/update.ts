@@ -1,4 +1,4 @@
-import type { Projection } from '../../../shared/src/config.ts';
+import type { Projection } from '../../../shared/src/config/index.ts';
 import { installedVersion } from './state.ts';
 import { stageUpdate } from './install.ts';
 

@@ -149,7 +149,7 @@ lines.on('line', (line) => {
       send({
         type: 'system',
         subtype: 'init',
-        session_id: 'claude_session_1',
+        session_id: scenario.includes('invalid-session') ? null : 'claude_session_1',
         model,
         permissionMode: 'auto',
       });

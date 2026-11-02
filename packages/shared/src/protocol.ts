@@ -1,5 +1,5 @@
-import type { Projection } from './config.ts';
-import { validateProjection } from './config.ts';
+import type { Projection } from './config/index.ts';
+import { validateProjection } from './config/index.ts';
 import { hash } from './hash.ts';
 import type { Effort, Engine, Family } from './types.ts';
 
