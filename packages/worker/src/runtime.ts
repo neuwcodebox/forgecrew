@@ -33,6 +33,9 @@ export class WorkerRuntime {
   private capabilities:WorkerCapabilities|undefined;
   private projection:Projection|undefined;
   private catalogAt=0;
+  private configSequence=0;
+  private heartbeatSequence=0;
+  private configWrites:Promise<void>=Promise.resolve();
   private draining=false;
   private stabilizing=process.env.FORGECREW_STABILIZING==='1';
   private updateCheck:((p:Projection,signal:AbortSignal)=>Promise<void>)|undefined;
@@ -64,11 +67,18 @@ export class WorkerRuntime {
     await this.flushResults();
   }
   private async sync(revision:string) {
-    if(this.projection?.configRevision===revision)return;
-    const p=await this.client.request<Projection>('/v1/config/'+revision,undefined,{method:'GET'});validateProjection(p);
+    const sequence=++this.configSequence;
+    const p=this.projection?.configRevision===revision?this.projection:await this.client.request<Projection>('/v1/config/'+revision,undefined,{method:'GET'});
+    validateProjection(p);
     if(p.configRevision!==revision||p.payload.github.hostname!==this.config.hostname)throw new Error('worker_config_host_mismatch');
-    await cacheProjection(this.directory,p);this.projection=p;this.client.requestTimeout=p.payload.runtime.requestTimeout;
+    const write=this.configWrites.catch(()=>{}).then(async()=>{
+      if(sequence!==this.configSequence)return;
+      if(this.projection?.configRevision!==revision)await cacheProjection(this.directory,p);
+      this.projection=p;this.client.requestTimeout=p.payload.runtime.requestTimeout;
+    });
+    this.configWrites=write;await write;
   }
+
   async refreshCapabilities() {
     if(!this.projection||!this.capabilities)return;
     const account=await this.github.account();this.capabilities.githubLogin=account.login;this.capabilities.githubId=String(account.id);
@@ -88,6 +98,7 @@ export class WorkerRuntime {
     if(!this.capabilities)throw new Error('worker_not_initialized');
     this.capabilities.draining=this.draining||this.stabilizing;
     if(this.projection)this.capabilities.configRevision=this.projection.configRevision;
+    const sequence=++this.heartbeatSequence;
     const response=await this.client.request<Heartbeat>('/v1/heartbeat',this.capabilities);
     // Lease renewal remains independent of model discovery, Git operations and new-config downloads.
     await Promise.all([...this.active.values()].map(async active=>{
@@ -110,7 +121,7 @@ export class WorkerRuntime {
       this.controlTasks.set(control.id,task);
     }
     // Only one synchronization is needed; failed downloads leave the current snapshot intact.
-    await this.sync(response.configRevision);
+    if(sequence===this.heartbeatSequence)await this.sync(response.configRevision);
   }
   private async interrupt(active:Active,reason:NonNullable<Active['reason']>) {
     if(active.reason)return;active.reason=reason;active.controller.abort();
@@ -246,6 +257,7 @@ export class WorkerRuntime {
     await mkdir(this.directory,{recursive:true,mode:0o700});
     this.projection=await readLatestProjection(this.directory).catch(()=>undefined);
     if(this.projection?.payload.github.hostname!==this.config.hostname)this.projection=undefined;
+    if(this.projection)this.client.requestTimeout=this.projection.payload.runtime.requestTimeout;
     for(const name of await readdir(join(this.directory,'journal')).catch(()=>[])){if(!name.endsWith('.json'))continue;const record=JSON.parse(await readFile(join(this.directory,'journal',name),'utf8')) as {result:unknown;resultHash:string};if(hash(record.result)!==record.resultHash)throw new Error('result_journal_corrupt');}
     process.send?.({type:'READY',protocolVersion:1});
     let backoff=1000,offlineUpdateAt=0;

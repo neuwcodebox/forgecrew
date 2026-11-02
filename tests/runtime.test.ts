@@ -43,9 +43,12 @@ async function setup(options:{loseCompletion?:boolean;engine?:'codex'|'claude';s
   const configs=new ConfigManager(configSource,c=>s.saveConfig(c));const app=createApp(s,configs,'r'.repeat(48));
   const dir=await mkdtemp(join(tmpdir(),'forgecrew-runtime-'));cleanup.push(()=>rm(dir,{recursive:true,force:true}));
   const local:LocalConfig={schemaVersion:1,id:randomUUID(),token:'t'.repeat(48),dispatcher:'http://localhost',hostname:configs.current.github.hostname,maxConcurrentSessions:1,engines:options.engine==='claude'?{claude:'fixture'}:{codex:'fixture',...(options.secondEngine?{claude:'fixture'}:{})}};
+  const transport:{config?:((url:string,response:Response)=>Promise<Response>)|undefined;heartbeat?:((url:string,response:Response)=>Promise<Response>)|undefined}={};
   let lose=options.loseCompletion??false;
   const fetcher:typeof fetch=async(input,init)=>{
     const response=await app.request(new Request(input,init));
+    if(String(input).endsWith('/v1/heartbeat')&&transport.heartbeat)return transport.heartbeat(String(input),response);
+    if(String(input).includes('/v1/config/')&&transport.config)return transport.config(String(input),response);
     if(lose&&String(input).endsWith('/v1/complete')){lose=false;throw new Error('completion_ack_lost');}return response;
   };
   const provider=new FakeProvider();
@@ -64,7 +67,7 @@ async function setup(options:{loseCompletion?:boolean;engine?:'codex'|'claude';s
     const peerRuntime=new WorkerRuntime(peerLocal,peerDir,{logger:r=>logs.push(r),client:new DispatcherClient(peerLocal,fetcher),github:peerGithub,providers:{codex:peerProvider}});
     cleanup.push(()=>peerRuntime.settleControls());await peerRuntime.initialize('r'.repeat(48));return {runtime:peerRuntime,provider:peerProvider,github:peerGithub,local:peerLocal};
   };
-  return {s,configs,dir,local,runtime,provider,secondProvider,github,id,key,peer,logs,tick:(ms:number)=>{offset+=ms;}};
+  return {s,configs,dir,local,runtime,provider,secondProvider,github,id,key,peer,logs,transport,tick:(ms:number)=>{offset+=ms;}};
 }
 describe('Dispatcher and Worker integration',()=>{
   it('claims, executes, journals and publishes, then resumes with the next central instructions',async()=>{
@@ -248,6 +251,31 @@ describe('Dispatcher and Worker integration',()=>{
     const f=await setup();f.github.verifyOutput=async()=>[99];await f.runtime.work();await Promise.all([...f.runtime.active.values()].map(a=>a.task));
     expect(f.s.sqlite.prepare('SELECT status FROM turns').get()).toEqual({status:'completed'});expect(f.logs.some(r=>r.event==='output_attribution_missing'&&r.pullNumber===99)).toBe(true);
     expect(f.s.sqlite.prepare('SELECT COUNT(*) AS n FROM deliveries').get()).toEqual({n:1});
+  });
+
+  it.each(['download','heartbeat'])('keeps the newest requested revision when an older %s response finishes later',async mode=>{
+    const f=await setup(),entered=deferred<void>(),release=deferred<void>();
+    f.configs.reload(configSource.replace('응답은 현재 대화의 언어로','revision one. 응답은 현재 대화의 언어로'));
+    const first=f.configs.current;let held=false;
+    f.transport[mode==='download'?'config':'heartbeat']=async(url,response)=>{if(mode==='download'&&url.endsWith(hash(first))||mode==='heartbeat'&&!held){held=true;entered.resolve();await release.promise;}return response;};
+    const older=f.runtime.heartbeat();await entered.promise;
+    f.configs.reload(configSource.replace('응답은 현재 대화의 언어로','revision two. 응답은 현재 대화의 언어로'));
+    try{await f.runtime.heartbeat();}finally{release.resolve();await older;}
+    expect(JSON.parse(await readFile(join(f.dir,'cache','config','1','current.json'),'utf8')).revision).toBe(hash(f.configs.current));
+  });
+  it('continues an issued Attempt lease through interrupted config download and retries synchronization',async()=>{
+    const f=await setup(),started=deferred<void>(),pending=deferred<Result>();
+    f.provider.factory=()=>{started.resolve();return {result:pending.promise,interrupt:async()=>{},steer:async()=>{},close:async()=>{}};};
+    await f.runtime.work();await started.promise;const active=[...f.runtime.active.values()][0]!;
+    const before=f.s.sqlite.prepare('SELECT lease_until FROM attempts WHERE id=?').get(active.claim.attemptId) as {lease_until:number};
+    f.configs.reload(configSource.replace('응답은 현재 대화의 언어로','new revision. 응답은 현재 대화의 언어로'));f.transport.config=async()=>{throw new Error('config_transfer_interrupted');};f.tick(1000);
+    try{
+      await expect(f.runtime.heartbeat()).rejects.toThrow('config_transfer_interrupted');
+      expect((f.s.sqlite.prepare('SELECT lease_until FROM attempts WHERE id=?').get(active.claim.attemptId) as {lease_until:number}).lease_until).toBeGreaterThan(before.lease_until);
+      expect(JSON.parse(await readFile(join(f.dir,'cache','config','1','current.json'),'utf8')).revision).toBe(active.claim.runConfig.configRevision);
+      delete f.transport.config;await f.runtime.heartbeat();expect(JSON.parse(await readFile(join(f.dir,'cache','config','1','current.json'),'utf8')).revision).toBe(hash(f.configs.current));
+      expect(active.claim.runConfig.payload.agent.instructions).not.toContain('new revision.');
+    }finally{pending.resolve({kind:'completed',text:'original snapshot answer'});await active.task;}
   });
 
 });

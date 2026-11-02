@@ -45,6 +45,15 @@ describe('SQLite ownership, FIFO and recovery',() => {
     const {s,c,w,tick}=setup();const a=s.claim(w.id,c)!;const changed=structuredClone(c);changed.runtime.leaseDuration=300000;tick(1000);
     expect(s.renew(a.attemptId,w.id,a.generation).leaseDuration).toBe(c.runtime.leaseDuration);
   });
+  it('keeps old and new lease policies distinct while their Attempts coexist',()=>{
+    const {s,c,w,id,tick,refresh}=setup();w.maxConcurrentSessions=2;refresh();const old=s.claim(w.id,c)!;
+    const changed=structuredClone(c);changed.runtime.leaseDuration=180000;changed.runtime.interruptGrace=20000;changed.runtime.reassignGrace=25000;
+    s.upsertSession({host:c.github.hostname,repository:'team/project-a',kind:'issue',number:2},['ai:enabled'],true,1000000,'new policy','author');
+    const next=s.claim(w.id,changed)!;expect(next.session.id).not.toBe(id);expect(next.leaseDuration).toBe(180000);
+    tick(1000);expect(s.renew(old.attemptId,w.id,old.generation)).toEqual({leaseDuration:90000,interruptGrace:10000});expect(s.renew(next.attemptId,w.id,next.generation)).toEqual({leaseDuration:180000,interruptGrace:20000});
+    tick(90000+c.runtime.reassignGrace);s.expire();expect(()=>s.complete(old.attemptId,w.id,old.generation,{kind:'completed',text:'expired'})).toThrow('lease_expired');
+    expect(()=>s.complete(next.attemptId,w.id,next.generation,{kind:'completed',text:'valid newer policy'})).not.toThrow();
+  });
   it('returns a slot after a question and accepts completion idempotently after ACK loss',() => {
     const {s,c,w,tick}=setup();const a=s.claim(w.id,c)!;const r={kind:'needs_reply' as const,text:'which authentication?'};
     const ids=s.complete(a.attemptId,w.id,a.generation,r);tick(c.runtime.leaseDuration+10000);

@@ -4,7 +4,7 @@
 
 - 단계: **Worker 실행·게시·분산 복구·Launcher/업데이트 구현과 사전 검증 완료. 실제 사내 수용 검증 대기**.
 - shared·dispatcher·worker 패키지에 중앙 YAML·SQLite·HTTP·활성화 구간·PR 리뷰·전체 재동기화 폴링과 두 Provider 어댑터를 구현했다. Worker의 setup/run/doctor, 독립 Heartbeat·Lease 감시, 격리 clone, 세션 재개, 완료 저널·게시 재조정, stop·steer를 연결했다. 실행 직전 중앙 권한·원본 댓글 검증과 시스템 라벨 동기화도 구현했다.
-- `npm run check`: TypeScript 검사, Vitest 122개 테스트, tsdown 기반 세 패키지 JS 빌드, 빌드된 CLI·Dispatcher 프로세스 기동·SQLite·HTTP 인증·설정 재로드 smoke 검사를 통과했다. 로컬 검증 환경은 Linux / Node.js 24.22.1이다. Provider 프로세스와 GitHub 통합 Fixture를 실제 구독 실행과 구별한다. 사내 계정·실제 구독 모델 Turn·Windows 실제 사용자 환경·실제 사내 npm 업데이트·로그인 자동 시작 시험은 수행하지 않았다. Launcher 자식 프로세스 전환·롤백·중복 기동·종료, drain·패키지 격리 설치와 loopback npm 레지스트리의 실제 tarball 다운로드·자동 전환·불량 버전 rollback·ID/저널/작업 파일 보존을 로컬 시험으로 확인했다.
+- `npm run check`: TypeScript 검사, Vitest 126개 테스트, tsdown 기반 세 패키지 JS 빌드, 빌드된 CLI·Dispatcher 프로세스 기동·SQLite·HTTP 인증·설정 재로드 smoke 검사를 통과했다. 로컬 검증 환경은 Linux / Node.js 24.22.1이다. Provider 프로세스와 GitHub 통합 Fixture를 실제 구독 실행과 구별한다. 사내 계정·실제 구독 모델 Turn·Windows 실제 사용자 환경·실제 사내 npm 업데이트·로그인 자동 시작 시험은 수행하지 않았다. Launcher 자식 프로세스 전환·롤백·중복 기동·종료, drain·패키지 격리 설치와 loopback npm 레지스트리의 실제 tarball 다운로드·자동 전환·불량 버전 rollback·ID/저널/작업 파일 보존을 로컬 시험으로 확인했다.
 - Linux/Windows GitHub Actions 검사와 Dispatcher Dockerfile을 추가했다. 코드 `4f19a10`의 [CI 41458341729](https://github.com/neuwcodebox/forgecrew/actions/runs/41458341729)에서 Linux/Windows의 122개 테스트·빌드·배포 패키지 실행·실제 npm tarball 자동 전환/rollback smoke와 Docker 검사가 모두 통과했다. Docker 검사는 비루트/읽기 전용 실행·원자적 YAML 교체·SQLite 재시작·정지 볼륨 백업/복원을 포함한다.
 - 제품 정책과 배포 구조는 [SPEC](SPEC.md), 구체적인 동작 계약은 [TECH](TECH.md)를 기준으로 한다.
 - 외부 환경에서 제공할 값은 GHES 호스트·테스트 저장소·PAT, Dispatcher 주소, 사내 npm 레지스트리·scope다. Worker는 기존 `gh` 및 Codex/Claude 구독 로그인을 사용한다.
@@ -76,7 +76,7 @@
 - [ ] Lease 만료 전 중단·자식 프로세스 정리와 재배정 유예 관계를 실제 Windows/Linux에서 시험한다.
 - [x] 완료 ACK 유실·게시 응답 유실·다른 계정 Worker의 Delivery만 복구를 통합 Fixture로 확인했다. 완료된 Provider 작업을 반복하지 않는다.
 - [x] dirty workspace 보존과 새 generation 완료 뒤 이전 Worker의 늦은 결과를 rejected-results에 보존하는 시험을 통과했다. 늦은 결과가 Delivery를 덮어쓰지 않는다.
-- [ ] 설정 전송 중단·초기 캐시 없음·설정 revision 경합·Lease 정책 변경 중의 신구 Attempt 동시 존재를 시험한다.
+- [x] 최초 캐시 없음/손상·전송 중단·이전 응답 지연·동시 설정 revision 활성화와 신구 Lease 정책의 Attempt 동시 존재를 단위/통합/프로세스 시험으로 확인했다. 늦은 설정 응답은 새 캐시를 덮어쓰지 않는다.
 
 **완료 기준:** 2개 이상의 Worker와 한 Worker 안의 2개 이상의 세션에서 용량·격리·권한 계약이 유지된다. Dispatcher 단절에 Worker가 죽지 않는다. 장애 복구가 완료 작업 재실행과 혼동되지 않는다.
 
@@ -149,7 +149,7 @@
 
 ## 통합 검증 시나리오
 
-아래 표는 전체 제품 수용 시험이다. 현재 `tests/`의 122개 시험과 `scripts/smoke.mjs`는 설정·모델 선택·상태 전이·HTTP·기본 폴링·Provider 프로세스·Worker 실행/제어/게시·빌드 산출물 기동의 계약을 검증한다. 이 통과를 사내 GitHub·실제 구독 런타임·Windows 실제 사용자 환경·무인 업데이트의 종단간 시험 통과로 취급하지 않는다.
+아래 표는 전체 제품 수용 시험이다. 현재 `tests/`의 126개 시험과 `scripts/smoke.mjs`는 설정·모델 선택·상태 전이·HTTP·기본 폴링·Provider 프로세스·Worker 실행/제어/게시·빌드 산출물 기동의 계약을 검증한다. 이 통과를 사내 GitHub·실제 구독 런타임·Windows 실제 사용자 환경·무인 업데이트의 종단간 시험 통과로 취급하지 않는다.
 
 | ID | 시나리오 | 기대 결과 | 요구·단계 |
 |---|---|---|---|
