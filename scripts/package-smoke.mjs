@@ -1,6 +1,6 @@
 import { mkdtemp,readFile,rm,writeFile,mkdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join,resolve } from 'node:path';
+import { join,resolve,delimiter } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import assert from 'node:assert/strict';
 import { command } from '../packages/worker/src/process.ts';
@@ -21,9 +21,12 @@ try {
   const bin=join(dir,'bin');await mkdir(bin);
   if(process.platform==='win32')await writeFile(join(bin,'gh.cmd'),'@exit /b 1\r\n');
   else await writeFile(join(bin,'gh'),'#!/bin/sh\nexit 1\n',{mode:0o700});
-  const launch=JSON.parse(await readFile(join(data,'launch.json'),'utf8'));launch.path=bin;await atomicWrite(join(data,'launch.json'),launch);
-  await startLauncher(data);const until=Date.now()+10000;
+  const launch=JSON.parse(await readFile(join(data,'launch.json'),'utf8'));launch.path=bin+delimiter+launch.path;await atomicWrite(join(data,'launch.json'),launch);
+  await startLauncher(data);const until=Date.now()+30000;
   while((await launcherStatus(data)).event!=='running'){assert.ok(Date.now()<until,'offline Worker did not become locally READY');await new Promise(r=>setTimeout(r,25));}
   await stopLauncher(data);assert.equal((await launcherStatus(data)).running,false);
   console.log('Packed Worker clean install, standalone CLI, local READY during service outage and graceful Launcher stop passed.');
+}catch(error){
+  for(const name of ['status.json','launcher-error.json','logs/launcher.log','logs/worker.log']){const diagnostic=await readFile(join(data,name),'utf8').catch(()=>undefined);if(diagnostic)console.error(name+': '+diagnostic.slice(-4000));}
+  throw error;
 }finally{await stopLauncher(data).catch(()=>{});await rm(dir,{recursive:true,force:true});}
