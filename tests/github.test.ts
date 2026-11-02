@@ -1,14 +1,14 @@
 import { describe, expect, it } from 'vitest';
 import { GhClient } from '../packages/worker/src/github.ts';
-import { Store } from '../packages/dispatcher/src/store.ts';
+import { Store } from '../packages/dispatcher/src/storage/index.ts';
 import { config, worker } from './helpers.ts';
 
 function claim() {
   const s = new Store(':memory:', () => 1000000),
     c = config(),
     w = worker(1000000);
-  s.register(w, 't'.repeat(48));
-  s.upsertSession(
+  s.workers.register(w, 't'.repeat(48));
+  s.sessions.upsert(
     { host: c.github.hostname, repository: 'team/project-a', kind: 'issue', number: 1 },
     ['ai:enabled'],
     true,
@@ -16,7 +16,7 @@ function claim() {
     'request',
     'writer',
   );
-  const result = s.claim(w.id, c);
+  const result = s.executions.claim(w.id, c);
   s.close();
   return result;
 }

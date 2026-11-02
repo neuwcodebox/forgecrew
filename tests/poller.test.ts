@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { Store } from '../packages/dispatcher/src/store.ts';
+import { Store } from '../packages/dispatcher/src/storage/index.ts';
 import { Poller, GitHubClient } from '../packages/dispatcher/src/github.ts';
 import type { GitHubSource } from '../packages/dispatcher/src/github.ts';
 import { config, worker } from './helpers.ts';
@@ -41,7 +41,7 @@ describe('GitHub polling normalization and checkpoints', () => {
     const { s, c, source, id } = setup();
     const p = new Poller(s, source, () => 1000000);
     await p.pollRepository('team/project-a', c);
-    expect(s.getSession(id)?.active).toBe(1);
+    expect(s.sessions.get(id)?.active).toBe(1);
     expect(s.sqlite.prepare('SELECT author FROM inputs').get()).toEqual({ author: 'writer' });
     await p.pollRepository('team/project-a', c);
     expect(s.sqlite.prepare('SELECT COUNT(*) AS n FROM inputs').get()).toEqual({ n: 1 });
@@ -50,7 +50,7 @@ describe('GitHub polling normalization and checkpoints', () => {
     const { s, c, source, id } = setup();
     source.permission = async () => false;
     await new Poller(s, source).pollRepository('team/project-a', c);
-    expect(s.getSession(id)?.active).toBe(0);
+    expect(s.sessions.get(id)?.active).toBe(0);
     expect(s.sqlite.prepare('SELECT COUNT(*) AS n FROM inputs').get()).toEqual({ n: 0 });
   });
   it('holds unauthorized model-label changes instead of trusting a current snapshot', async () => {
@@ -64,7 +64,7 @@ describe('GitHub polling normalization and checkpoints', () => {
       },
     ];
     await new Poller(s, source).pollRepository('team/project-a', c);
-    expect(s.getSession(id)?.active).toBe(0);
+    expect(s.sessions.get(id)?.active).toBe(0);
   });
   it('does not advance an objects checkpoint on a failed events page', async () => {
     const { s, c, source } = setup();
@@ -72,7 +72,7 @@ describe('GitHub polling normalization and checkpoints', () => {
       throw new Error('page_failed');
     };
     await expect(new Poller(s, source).pollRepository('team/project-a', c)).rejects.toThrow();
-    expect(s.cursor(c.github.hostname + ':team/project-a:objects')).toBe(0);
+    expect(s.checkpoints.get(c.github.hostname + ':team/project-a:objects')).toBe(0);
   });
   it('normalizes PRs from the Issues API into one independent session', async () => {
     const { s, c, source } = setup();
@@ -98,11 +98,11 @@ describe('GitHub polling normalization and checkpoints', () => {
     const p = new Poller(s, source, () => now);
     await p.pollRepository('team/project-a', c);
     const w = worker(now, { githubLogin: 'writer', githubId: '123' });
-    s.register(w, 'a'.repeat(48));
-    const a = s.claim(w.id, c)!;
-    s.complete(a.attemptId, w.id, a.generation, { kind: 'completed', text: 'AI reply' });
-    const d = s.claimDelivery(w.id, c.runtime.leaseDuration)!;
-    s.beginPost(w.id, d.id);
+    s.workers.register(w, 'a'.repeat(48));
+    const a = s.executions.claim(w.id, c)!;
+    s.executions.complete(a.attemptId, w.id, a.generation, { kind: 'completed', text: 'AI reply' });
+    const d = s.deliveries.claim(w.id, c.runtime.leaseDuration)!;
+    s.deliveries.beginPost(w.id, d.id);
     const next: GitHubSource = {
       ...source,
       comments: async (_repo, _since, review) =>

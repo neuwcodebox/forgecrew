@@ -1,5 +1,5 @@
 import { sqliteTable, text, integer } from 'drizzle-orm/sqlite-core';
-import type { Config } from '../../shared/src/config.ts';
+import type { Config } from '../../../shared/src/config.ts';
 
 export const configSnapshots = sqliteTable('config_snapshots', {
   revision: text('revision').primaryKey(),

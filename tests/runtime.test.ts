@@ -3,7 +3,7 @@ import { mkdtemp, readFile, readdir, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { randomUUID } from 'node:crypto';
-import { Store } from '../packages/dispatcher/src/store.ts';
+import { Store } from '../packages/dispatcher/src/storage/index.ts';
 import { createApp } from '../packages/dispatcher/src/api.ts';
 import { ConfigManager } from '../packages/shared/src/config.ts';
 import { configSource, worker } from './helpers.ts';
@@ -104,7 +104,7 @@ async function setup(
   let offset = 0;
   const s = new Store(':memory:', () => Date.now() + offset);
   cleanup.push(async () => s.close());
-  const configs = new ConfigManager(configSource, (c) => s.saveConfig(c));
+  const configs = new ConfigManager(configSource, (c) => s.configs.save(c));
   const app = createApp(s, configs, 'r'.repeat(48));
   const dir = await mkdtemp(join(tmpdir(), 'forgecrew-runtime-'));
   cleanup.push(() => rm(dir, { recursive: true, force: true }));
@@ -176,7 +176,7 @@ async function setup(
     kind: 'issue' as const,
     number: 1,
   };
-  const id = s.upsertSession(
+  const id = s.sessions.upsert(
     key,
     options.engine === 'claude' ? ['ai:enabled', 'ai:model:opus'] : ['ai:enabled'],
     true,
@@ -240,7 +240,7 @@ describe('Dispatcher and Worker integration', () => {
         ),
       ),
     ).toBe(true);
-    f.s.enqueue(f.id, 'comment', '42', 'next request', 'writer', Date.now() + 1);
+    f.s.sessions.enqueue(f.id, 'comment', '42', 'next request', 'writer', Date.now() + 1);
     await f.runtime.work();
     await Promise.all([...f.runtime.active.values()].map((a) => a.task));
     expect(f.provider.requests[1]!.resume?.id).toBe('provider_session_1');
@@ -289,8 +289,8 @@ describe('Dispatcher and Worker integration', () => {
     await f.runtime.work();
     await started.promise;
     const a = [...f.runtime.active.values()][0]!;
-    f.s.enqueue(f.id, 'comment', 'next', 'follow-up', 'writer', Date.now() + 1);
-    f.s.addControl(f.id, 'stop_comment', { kind: 'stop' }, Date.now());
+    f.s.sessions.enqueue(f.id, 'comment', 'next', 'follow-up', 'writer', Date.now() + 1);
+    f.s.executions.addControl(f.id, 'stop_comment', { kind: 'stop' }, Date.now());
     await f.runtime.heartbeat();
     await a.task;
     await f.runtime.settleControls();
@@ -330,7 +330,12 @@ describe('Dispatcher and Worker integration', () => {
     await f.runtime.work();
     await first.promise;
     const previous = f.provider.requests[0]!.claim;
-    f.s.addControl(f.id, 'steer_comment', { kind: 'steer', text: 'use SSO' }, Date.now());
+    f.s.executions.addControl(
+      f.id,
+      'steer_comment',
+      { kind: 'steer', text: 'use SSO' },
+      Date.now(),
+    );
     await f.runtime.heartbeat();
     await second.promise;
     await Promise.all([...f.runtime.active.values()].map((a) => a.task));
@@ -343,7 +348,7 @@ describe('Dispatcher and Worker integration', () => {
   });
   it('refuses a forged run snapshot before invoking a Provider', async () => {
     const f = await setup();
-    const claim = f.s.claim(f.local.id, f.configs.current)!;
+    const claim = f.s.executions.claim(f.local.id, f.configs.current)!;
     claim.runConfig.payload.agent.instructions = 'tampered';
     expect(() => f.runtime.start(claim)).toThrow();
     expect(f.provider.requests).toHaveLength(0);
@@ -372,7 +377,7 @@ describe('Dispatcher and Worker integration', () => {
     };
     await f.runtime.work();
     await started.promise;
-    f.s.enqueue(f.id, 'comment', 'next', 'follow-up', 'writer', Date.now() + 1);
+    f.s.sessions.enqueue(f.id, 'comment', 'next', 'follow-up', 'writer', Date.now() + 1);
     const draining = f.runtime.drain(60000);
     result.resolve({ kind: 'completed', text: 'finished before update' });
     await draining;
@@ -451,7 +456,7 @@ describe('Dispatcher and Worker integration', () => {
     expect(f.provider.requests).toHaveLength(1);
     expect(f.github.posted).toHaveLength(0);
     expect(f.s.sqlite.prepare('SELECT status FROM turns').get()).toEqual({ status: 'recovering' });
-    expect(f.s.getSession(f.id)?.blocked_reason).toBe('latest_model_unavailable');
+    expect(f.s.sessions.get(f.id)?.blocked_reason).toBe('latest_model_unavailable');
     f.provider.factory = () => ({
       result: Promise.resolve({ kind: 'completed', text: 'recovered' }),
       interrupt: async () => {},
@@ -478,7 +483,7 @@ describe('Dispatcher and Worker integration', () => {
       id: 'gpt-6.10-sol',
       availability: 'auth_required',
     });
-    expect(f.s.claim(f.local.id, f.configs.current)).toBeNull();
+    expect(f.s.executions.claim(f.local.id, f.configs.current)).toBeNull();
   });
 
   it('issues one owner under competing Claims and isolates stop across two concurrent sessions', async () => {
@@ -513,7 +518,7 @@ describe('Dispatcher and Worker integration', () => {
     try {
       await Promise.all([f.runtime.work(), peer.runtime.work()]);
       expect(f.runtime.active.size + peer.runtime.active.size).toBe(1);
-      f.s.upsertSession(
+      f.s.sessions.upsert(
         { ...f.key, number: 2 },
         ['ai:enabled'],
         true,
@@ -526,7 +531,12 @@ describe('Dispatcher and Worker integration', () => {
       expect(peer.runtime.active.size).toBe(1);
       await Promise.all([firstStarted.promise, secondStarted.promise]);
       const claim = f.provider.requests[0]!.claim;
-      f.s.addControl(claim.session.id, 'stop_first_worker', { kind: 'stop' }, Date.now());
+      f.s.executions.addControl(
+        claim.session.id,
+        'stop_first_worker',
+        { kind: 'stop' },
+        Date.now(),
+      );
       await f.runtime.heartbeat();
       await f.runtime.settleControls();
       expect(f.runtime.active.size).toBe(0);
@@ -650,7 +660,7 @@ describe('Dispatcher and Worker integration', () => {
       steer: async () => {},
       close: async () => {},
     });
-    f.s.upsertSession(
+    f.s.sessions.upsert(
       { ...f.key, number: 2 },
       ['ai:enabled', 'ai:model:opus'],
       true,

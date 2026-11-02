@@ -3,7 +3,7 @@ import { chmod, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
-import { Store } from '../packages/dispatcher/src/store.ts';
+import { Store } from '../packages/dispatcher/src/storage/index.ts';
 import { config, worker } from './helpers.ts';
 import { CodexProvider } from '../packages/worker/src/providers/codex.ts';
 import { ClaudeProvider, claudeModel } from '../packages/worker/src/providers/claude.ts';
@@ -31,8 +31,8 @@ async function fixture(scenario: string) {
   const s = new Store();
   const c = config(),
     w = worker(Date.now());
-  s.register(w, 'a'.repeat(48));
-  s.upsertSession(
+  s.workers.register(w, 'a'.repeat(48));
+  s.sessions.upsert(
     { host: c.github.hostname, repository: 'team/project-a', kind: 'issue', number: 1 },
     ['ai:enabled'],
     true,
@@ -40,7 +40,7 @@ async function fixture(scenario: string) {
     'request',
     'writer',
   );
-  const claim = s.claim(w.id, c)!;
+  const claim = s.executions.claim(w.id, c)!;
   s.close();
   if (scenario.startsWith('claude')) {
     claim.runConfig.engine = 'claude';

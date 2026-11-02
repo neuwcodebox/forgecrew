@@ -6,8 +6,8 @@ import { configRevision, workerProjection } from '../../shared/src/config.ts';
 import type { ConfigManager } from '../../shared/src/config.ts';
 import { secretEqual } from '../../shared/src/hash.ts';
 import { ContractError, efforts, families } from '../../shared/src/types.ts';
-import type { Store } from './store.ts';
-import type { Preflight } from './store.ts';
+import type { Store } from './storage/index.ts';
+import type { Preflight } from './storage/index.ts';
 import type { WorkClaim } from '../../shared/src/protocol.ts';
 
 const model = z.strictObject({
@@ -79,25 +79,25 @@ export function createApp(
     const request = z
       .strictObject({ capabilities: capabilitiesSchema, token: z.string().min(32).max(200) })
       .parse(await c.req.json());
-    store.register(request.capabilities, request.token);
+    store.workers.register(request.capabilities, request.token);
     return c.json({ protocolVersion: 1, configRevision: configRevision(configs.current) });
   });
   app.use('/v1/*', async (c, next) => {
     const worker = c.req.header('X-ForgeCrew-Worker') ?? '';
     const bearer = c.req.header('Authorization')?.replace(/^Bearer /, '') ?? '';
-    if (!store.authenticate(worker, bearer)) throw new ContractError('unauthorized', 401);
+    if (!store.workers.authenticate(worker, bearer)) throw new ContractError('unauthorized', 401);
     c.set('worker', worker);
     await next();
   });
   app.get('/v1/status', (c) =>
     c.json({
-      ...store.status(c.get('worker')),
+      ...store.diagnostics.status(c.get('worker')),
       configRevision: configRevision(configs.current),
       configError: configs.lastError,
     }),
   );
   app.get('/v1/config/:revision', (c) => {
-    const projection = workerProjection(store.getConfig(c.req.param('revision')));
+    const projection = workerProjection(store.configs.get(c.req.param('revision')));
     if (c.req.header('If-None-Match') === '"' + projection.payloadHash + '"')
       return c.body(null, 304);
     c.header('ETag', '"' + projection.payloadHash + '"');
@@ -105,10 +105,10 @@ export function createApp(
   });
   app.post('/v1/heartbeat', async (c) => {
     const capabilities = capabilitiesSchema.parse(await c.req.json());
-    store.heartbeat(c.get('worker'), capabilities);
+    store.workers.heartbeat(c.get('worker'), capabilities);
     return c.json({
       configRevision: configRevision(configs.current),
-      controls: store.controls(c.get('worker')),
+      controls: store.executions.pendingControls(c.get('worker')),
     });
   });
   app.post('/v1/claim', async (c) => {
@@ -117,8 +117,8 @@ export function createApp(
     let claim;
     do {
       if (c.req.raw.signal.aborted) break;
-      claim = store.claim(c.get('worker'), configs.current);
-      if (claim || Date.now() >= deadline || store.hasDelivery(c.get('worker'))) break;
+      claim = store.executions.claim(c.get('worker'), configs.current);
+      if (claim || Date.now() >= deadline || store.deliveries.hasPending(c.get('worker'))) break;
       await delay(Math.min(250, Math.max(1, deadline - Date.now())), undefined, {
         signal: c.req.raw.signal,
       }).catch(() => {});
@@ -129,35 +129,35 @@ export function createApp(
       try {
         decision = await verifyInput(claim);
       } catch {
-        store.preflight(claim.attemptId, c.get('worker'), claim.generation, {
+        store.executions.preflight(claim.attemptId, c.get('worker'), claim.generation, {
           status: 'hold',
           reason: 'input_verification_unavailable',
         });
         throw new ContractError('input_verification_unavailable', 503);
       }
-      if (!store.preflight(claim.attemptId, c.get('worker'), claim.generation, decision))
+      if (!store.executions.preflight(claim.attemptId, c.get('worker'), claim.generation, decision))
         return c.json({ claim: null });
     }
     return c.json({ claim });
   });
   app.post('/v1/renew', async (c) => {
     const r = identity.parse(await c.req.json());
-    return c.json(store.renew(r.attemptId, c.get('worker'), r.generation));
+    return c.json(store.executions.renew(r.attemptId, c.get('worker'), r.generation));
   });
   app.post('/v1/complete', async (c) => {
     const r = completed.parse(await c.req.json());
     return c.json({
-      deliveries: store.complete(r.attemptId, c.get('worker'), r.generation, r.result),
+      deliveries: store.executions.complete(r.attemptId, c.get('worker'), r.generation, r.result),
     });
   });
   app.post('/v1/cancel', async (c) => {
     const r = identity.parse(await c.req.json());
-    store.cancel(r.attemptId, c.get('worker'), r.generation);
+    store.executions.cancel(r.attemptId, c.get('worker'), r.generation);
     return c.json({ ok: true });
   });
   app.post('/v1/release', async (c) => {
     const r = identity.parse(await c.req.json());
-    store.release(r.attemptId, c.get('worker'), r.generation);
+    store.executions.release(r.attemptId, c.get('worker'), r.generation);
     return c.json({ ok: true });
   });
   app.post('/v1/steer-restart', async (c) => {
@@ -165,28 +165,28 @@ export function createApp(
       .extend({ controlId: z.string().regex(/^[0-9a-f]{64}$/) })
       .parse(await c.req.json());
     return c.json({
-      claim: store.restartSteer(r.attemptId, c.get('worker'), r.generation, r.controlId),
+      claim: store.executions.restartSteer(r.attemptId, c.get('worker'), r.generation, r.controlId),
     });
   });
   app.post('/v1/controls/:id/ack', (c) => {
-    store.ackControl(c.get('worker'), c.req.param('id'));
+    store.executions.ackControl(c.get('worker'), c.req.param('id'));
     return c.json({ ok: true });
   });
   app.post('/v1/deliveries/claim', (c) =>
     c.json({
-      delivery: store.claimDelivery(c.get('worker'), configs.current.runtime.leaseDuration),
+      delivery: store.deliveries.claim(c.get('worker'), configs.current.runtime.leaseDuration),
     }),
   );
   app.post('/v1/deliveries/:id/renew', (c) =>
-    c.json(store.renewDelivery(c.get('worker'), c.req.param('id'))),
+    c.json(store.deliveries.renew(c.get('worker'), c.req.param('id'))),
   );
   app.post('/v1/deliveries/:id/begin', (c) => {
-    store.beginPost(c.get('worker'), c.req.param('id'));
+    store.deliveries.beginPost(c.get('worker'), c.req.param('id'));
     return c.json({ ok: true });
   });
   app.post('/v1/deliveries/:id/receipt', async (c) => {
     const r = z.strictObject({ githubId: z.string().regex(/^\d+$/) }).parse(await c.req.json());
-    store.deliveryReceipt(c.get('worker'), c.req.param('id'), r.githubId);
+    store.deliveries.receipt(c.get('worker'), c.req.param('id'), r.githubId);
     return c.json({ ok: true });
   });
   return app;

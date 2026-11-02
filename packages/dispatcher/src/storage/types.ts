@@ -1,0 +1,60 @@
+export type Session = {
+  id: string;
+  host: string;
+  repository: string;
+  kind: 'issue' | 'pull';
+  number: number;
+  active: number;
+  activation_at: number;
+  labels: string;
+  previous_worker: string | null;
+  blocked_reason: string | null;
+};
+export type Input = {
+  id: string;
+  session_id: string;
+  source_kind: string;
+  source_id: string;
+  body: string;
+  author: string;
+  created_at: number;
+  status: string;
+};
+export type Turn = {
+  id: string;
+  input_id: string;
+  session_id: string;
+  status: string;
+  run_config: string | null;
+  generation: number;
+};
+export type Attempt = {
+  id: string;
+  turn_id: string;
+  session_id: string;
+  worker_id: string;
+  generation: number;
+  status: string;
+  started_at: number;
+  ended_at: number | null;
+  lease_until: number;
+  lease_duration: number;
+  interrupt_grace: number;
+  reassign_grace: number;
+  result_hash: string | null;
+};
+export type Delivery = {
+  id: string;
+  session_id: string;
+  turn_id: string;
+  body: string;
+  body_hash: string;
+  expected_author: string | null;
+  status: string;
+  worker_id: string | null;
+  claim_until: number | null;
+  github_id: string | null;
+  lease_duration: number | null;
+};
+export type ActivationWindow = { openedAt: number; closedAt: number | null };
+export type Preflight = { status: 'ready' | 'hold' | 'cancel'; body?: string; reason?: string };

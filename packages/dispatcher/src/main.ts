@@ -2,7 +2,7 @@ import { mkdir, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { serve } from '@hono/node-server';
 import { ConfigManager, parseConfig } from '../../shared/src/config.ts';
-import { Store } from './store.ts';
+import { Store } from './storage/index.ts';
 import { createApp } from './api.ts';
 import { GitHubClient, Poller } from './github.ts';
 
@@ -16,7 +16,7 @@ async function main() {
     throw new Error('required Dispatcher secrets are missing or too short');
   await mkdir(initial.server.dataDir, { recursive: true });
   const store = new Store(join(initial.server.dataDir, 'forgecrew.sqlite'));
-  const configs = new ConfigManager(source, (config) => store.saveConfig(config));
+  const configs = new ConfigManager(source, (config) => store.configs.save(config));
   const github = new GitHubClient(initial, pat);
   const poller = new Poller(store, github);
   let stopping = false;

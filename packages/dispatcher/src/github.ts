@@ -2,7 +2,7 @@ import { Octokit } from '@octokit/rest';
 import type { Config } from '../../shared/src/config.ts';
 import { canWrite, parseControl } from '../../shared/src/input.ts';
 import { sessionId } from '../../shared/src/hash.ts';
-import type { Store, ActivationWindow, Preflight } from './store.ts';
+import type { Store, ActivationWindow, Preflight } from './storage/index.ts';
 import type { WorkClaim } from '../../shared/src/protocol.ts';
 
 type Issue = {
@@ -194,9 +194,12 @@ export class Poller {
     const scope = config.github.hostname + ':' + repository + ':objects';
     const start = this.now();
     const reconcile =
-      this.store.cursor(scope + ':reconcile') + config.github.polling.reconcileInterval <= start;
+      this.store.checkpoints.get(scope + ':reconcile') + config.github.polling.reconcileInterval <=
+      start;
     const since = new Date(
-      reconcile ? 0 : Math.max(0, this.store.cursor(scope) - config.github.polling.overlap),
+      reconcile
+        ? 0
+        : Math.max(0, this.store.checkpoints.get(scope) - config.github.polling.overlap),
     ).toISOString();
     const issues = await this.source.issues(repository, since);
     for (const issue of issues) {
@@ -246,7 +249,7 @@ export class Poller {
           l.startsWith(config.labels.effortPrefix),
       );
       const consistent = [...labels].sort().join('\0') === relevantActual.sort().join('\0');
-      this.store.upsertSession(
+      this.store.sessions.upsert(
         key,
         [...labels],
         active && consistent,
@@ -256,20 +259,21 @@ export class Poller {
         windows,
       );
     }
-    this.store.advanceCursor(scope, start);
-    if (reconcile) this.store.advanceCursor(scope + ':reconcile', start);
+    this.store.checkpoints.advance(scope, start);
+    if (reconcile) this.store.checkpoints.advance(scope + ':reconcile', start);
     // Independent cursors: a failed comment page cannot advance another stream's checkpoint.
     for (const review of [false, true]) {
       const commentScope =
         config.github.hostname + ':' + repository + ':' + (review ? 'review_comments' : 'comments');
       const collectedAt = this.now();
       const reconcileComments =
-        this.store.cursor(commentScope + ':reconcile') + config.github.polling.reconcileInterval <=
+        this.store.checkpoints.get(commentScope + ':reconcile') +
+          config.github.polling.reconcileInterval <=
         collectedAt;
       const commentSince = new Date(
         reconcileComments
           ? 0
-          : Math.max(0, this.store.cursor(commentScope) - config.github.polling.overlap),
+          : Math.max(0, this.store.checkpoints.get(commentScope) - config.github.polling.overlap),
       ).toISOString();
       const comments = await this.source.comments(repository, commentSince, review);
       for (const comment of comments.sort(
@@ -280,14 +284,14 @@ export class Poller {
         const keys = review ? ['pull' as const] : ['issue' as const, 'pull' as const];
         const session = keys
           .map((kind) =>
-            this.store.getSession(
+            this.store.sessions.get(
               sessionId({ host: config.github.hostname, repository, kind, number }),
             ),
           )
           .find(Boolean);
         if (
           !session ||
-          this.store.isAutomatic(
+          this.store.deliveries.isAutomatic(
             session.id,
             String(comment.id),
             String(comment.user.id),
@@ -301,14 +305,14 @@ export class Poller {
         const control = parseControl(comment.body);
         if (control) {
           if (created === updated)
-            this.store.addControl(
+            this.store.executions.addControl(
               session.id,
               (review ? 'review_comment:' : 'comment:') + comment.id,
               control,
               created,
             );
         } else
-          this.store.enqueue(
+          this.store.sessions.enqueue(
             session.id,
             review ? 'review_comment' : 'comment',
             String(comment.id),
@@ -318,11 +322,12 @@ export class Poller {
             updated,
           );
       }
-      this.store.advanceCursor(commentScope, collectedAt);
-      if (reconcileComments) this.store.advanceCursor(commentScope + ':reconcile', collectedAt);
+      this.store.checkpoints.advance(commentScope, collectedAt);
+      if (reconcileComments)
+        this.store.checkpoints.advance(commentScope + ':reconcile', collectedAt);
     }
     if (this.source.reviews)
-      for (const session of this.store.sessions(repository).filter((s) => s.kind === 'pull')) {
+      for (const session of this.store.sessions.list(repository).filter((s) => s.kind === 'pull')) {
         const reviews = await this.source.reviews(repository, session.number);
         for (const review of reviews) {
           if (
@@ -333,7 +338,7 @@ export class Poller {
             !(await this.writable(repository, review.user.login, config))
           )
             continue;
-          this.store.enqueue(
+          this.store.sessions.enqueue(
             session.id,
             'review',
             String(review.id),
@@ -344,8 +349,8 @@ export class Poller {
         }
       }
     if (this.source.syncLabels)
-      for (const session of this.store.sessions(repository)) {
-        const state = this.store.sessionStatus(session);
+      for (const session of this.store.sessions.list(repository)) {
+        const state = this.store.diagnostics.sessionStatus(session);
         const desired = [
           config.labels.statusPrefix + state.status,
           ...(state.worker ? [config.labels.workerPrefix + state.worker] : []),
