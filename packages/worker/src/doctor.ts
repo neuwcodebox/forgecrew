@@ -13,6 +13,7 @@ export async function doctor(config:LocalConfig):Promise<Diagnostic[]> {
     const [major,minor]=process.versions.node.split('.').map(Number);
     if(major!==24||(minor??0)<11)throw new Error('node_version');return process.versions.node;
   });
+  await check('npm',async()=>{const r=await command('npm',['--version']);if(r.code!==0)throw new Error();return r.stdout.trim();});
   await check('git',async () => {const r=await command('git',['--version']);if(r.code!==0)throw new Error();return r.stdout.trim();});
   await check('github',async () => {
     const r=await command('gh',['api','--hostname',config.hostname,'user','--jq','{login: .login, id: .id}']);

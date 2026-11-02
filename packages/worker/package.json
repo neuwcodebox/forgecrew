@@ -6,12 +6,17 @@
     "forgecrew": "dist/cli.js"
   },
   "files": [
-    "dist"
+    "dist",
+    "launcher.mjs"
   ],
   "engines": {
     "node": ">=24.11.0 <25"
   },
   "scripts": {
     "build": "tsdown src/cli.ts --config ../../tsdown.config.ts --out-dir dist"
+  },
+  "forgecrew": {
+    "launcherProtocol": 1,
+    "stateSchema": 1
   }
 }

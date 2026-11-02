@@ -4,7 +4,7 @@
 
 ForgeCrew는 사내 GitHub Enterprise Server의 Issue와 Pull Request를 AI 대화 세션으로 사용하는 경량 셀프호스팅 플랫폼입니다. 단일 Dispatcher가 요청을 분배하고, 여러 PC의 Worker가 각 동료의 개발 환경과 로그인으로 Codex·Claude를 실행합니다.
 
-> 개발 중입니다. 중앙 설정·SQLite 실행 상태·Dispatcher API·기본 GitHub 폴링, Codex/Claude 어댑터와 Worker 실행·게시 루프를 구현했습니다. 실제 사내 저장소·구독 런타임의 종단간 검증과 Launcher·무인 업데이트가 남아 있습니다. 실사용 릴리스 완료 여부는 [개발 계획](docs/PLAN.md)을 기준으로 확인하세요.
+> 개발 중입니다. 중앙 설정·SQLite 실행 상태·Dispatcher API·기본 GitHub 폴링, Codex/Claude 어댑터와 Worker 실행·게시 루프를 구현했습니다. 백그라운드 Launcher·버전별 설치·전환·롤백도 구현했으며, 실제 사내 저장소·구독 런타임·로그인 자동 시작·사내 npm 배포의 운영 검증은 남아 있습니다. 실사용 릴리스 완료 여부는 [개발 계획](docs/PLAN.md)을 기준으로 확인하세요.
 
 ## 개발 환경에서 실행
 
@@ -34,10 +34,16 @@ node packages/worker/dist/cli.js doctor --config /path/to/worker.json
 
 ```bash
 node packages/worker/dist/cli.js setup --dispatcher https://dispatcher.example.internal --hostname github.example.internal --engine codex
-node packages/worker/dist/cli.js run
+node packages/worker/dist/cli.js start
+node packages/worker/dist/cli.js status
+node packages/worker/dist/cli.js stop
 ```
 
-Worker는 해당 PC의 `gh`·Git·선택한 AI 실행 파일과 기존 로그인을 사용합니다. `run`은 포그라운드 실행이며 같은 Worker의 중복 실행을 방지합니다. `SIGINT`/`SIGTERM`으로 종료하면 실행 중 프로세스를 정리하고 미전달 결과를 보존합니다. 백그라운드 Launcher·사용자 로그인 자동 시작·무인 업데이트는 개발 중입니다.
+Worker는 해당 PC의 `gh`·Git·선택한 AI 실행 파일과 기존 로그인을 사용합니다. `run`은 포그라운드 실행이며 같은 Worker의 중복 실행을 방지합니다. `SIGINT`/`SIGTERM`으로 종료하면 실행 중 프로세스를 정리하고 미전달 결과를 보존합니다. `start`는 별도 Launcher를 백그라운드로 실행하며 `stop`은 의도적 종료를 기록합니다. 같은 설정으로 setup을 다시 실행하면 Launcher를 복구할 수 있습니다. 이때 실행 중인 Launcher를 먼저 중지하세요. 데이터 위치는 `FORGECREW_DATA_DIR`로 지정할 수 있습니다.
+
+`setup --autostart` 또는 `autostart enable`로 Linux 사용자 systemd 서비스·Windows 사용자 로그온 작업을 등록합니다. 해제는 `autostart disable`입니다. Linux 사용자 서비스 관리자가 없다면 Launcher를 기존 사용자 프로세스 관리자에 연결해야 합니다. 자동 시작의 실제 로그인 시험은 아직 수행하지 않았습니다.
+
+Worker는 중앙 `updates` 설정의 registry·package·channel을 조회해 정확한 버전을 별도 경로에 설치합니다. 설치 스크립트를 실행하지 않으며 npm lock 무결성·Node·Launcher/상태 계약을 확인합니다. 준비가 끝나면 새 작업을 멈추고 현재 Turn을 정리해 전환합니다. 로컬 READY와 안정화 관찰을 통과하면 승격하고, 기동 실패에는 이전 버전으로 복귀해 실패 버전의 재시도를 유예합니다. Dispatcher 접속 실패만으로 정상 버전을 롤백하지 않습니다. 실제 사내 npm 패키지 게시·업데이트 시험은 남아 있습니다.
 
 Dispatcher의 Dockerfile도 제공합니다. 이미지에는 설정 파일과 비밀값을 넣지 않습니다. `/config/config.yaml`을 읽기 전용으로, `/data`를 쓰기 가능한 영속 볼륨으로 마운트하세요. 기본 healthcheck 포트는 설정 예제와 같은 8080입니다. Docker 이미지 빌드·컨테이너 시험은 아직 수행하지 않았습니다.
 

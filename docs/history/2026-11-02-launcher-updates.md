@@ -1,0 +1,22 @@
+# Launcher와 버전 전환 계약 구현
+
+관련 요구는 F7·F11·F12·N2·N3·N5, 단계는 P1·P3·P5다.
+
+## 구현
+
+Worker 패키지에 의존성 없는 Launcher protocol 1 부트스트랩을 포함한다. setup이 로컬 Launcher·실행 경로·최초 버전 snapshot을 준비하고 start/stop/status가 사용자별 단일 프로세스와 의도적 종료 상태를 관리한다. setup 재실행은 정지 상태의 부트스트랩 repair 경로다. Linux 사용자 systemd 서비스와 Windows 현재 사용자의 제한된 로그온 작업 등록/해제를 제공한다. 전역 npm이나 실행 중 버전 디렉터리를 덮어쓰지 않는다.
+
+버전별 Worker가 중앙 업데이트 설정으로 정확한 npm 버전을 staging에 설치한다. 사용자 npm 인증·프록시·CA를 유지하며 설치 스크립트를 비활성화한다. tarball registry origin, lock integrity·resolved URL, package 이름·버전·단독 번들·bin, Node engine, Launcher protocol·상태 schema를 확인한 완성된 설치만 versions로 옮긴다. 실패 버전 cooldown은 설치기와 Launcher에서 확인한다.
+
+STAGE_READY를 포인터에 기록한 뒤 ACK한다. Worker는 새 Claim을 중지하고 Lease·제어·결과 게시를 유지한다. 현재 Turn 종료 또는 drain 한도 interrupt·종료 후 SWITCH를 요청한다. 새 Worker는 안정화 중 새 Claim을 받지 않으며, READY·로컬 HEALTH와 관찰 구간을 통과한 뒤 ACTIVATE를 받는다. Dispatcher 불통은 로컬 버전 실패로 분류하지 않는다. 호환 schema의 마지막 설정 캐시를 사용해 초기 연결 실패 중에도 업데이트를 확인할 수 있다.
+
+포인터는 원자적으로 교체하며 이전 포인터를 보존한다. 전환/관찰 도중 Launcher가 충돌하면 후보를 정상으로 간주하지 않고 lastKnownGood로 복구한다. 자식 프로세스 ID와 OS 생성 식별자를 기록해 재시작 시 PID 재사용으로 다른 프로세스를 종료하지 않게 확인한다. Worker 출력은 크기를 제한해 회전한다.
+
+## 검증 범위
+
+- Launcher 자식 프로세스로 중복 start, 의도적 stop, 명시적 재시작, 전환 순서, READY·안정화·승격, 후보 충돌·rollback·cooldown, 전환 도중 충돌 복구와 포인터 손상을 시험했다.
+- npm metadata/설치 Fixture로 정확한 버전·ignore-scripts·engine-strict·lock 무결성·registry origin·배포 계약을 확인했다.
+- Worker 통합 시험으로 Turn 경계 drain과 한도 interrupt 후 recovering 상태, 대기 입력·미게시 Delivery 보존을 확인했다.
+- 실제 `npm pack` 산출물을 개발 의존성 없는 별도 prefix에 설치해 CLI·Launcher·로컬 READY·graceful stop을 시험했다. gh를 로컬 실패 Fixture로 바꿔 외부 계정이나 모델을 사용하지 않았다.
+
+실제 사내 registry 게시·인증·실행 중 새 릴리스 감지, Windows/Linux 로그인/로그아웃·절전·자식 프로세스 트리 종료, 실제 구독 모델·Auto Review·GHES 대화는 별도 운영 수용 시험으로 남아 있다. 어댑터/Fixture 통과를 해당 시험의 완료로 표시하지 않는다.

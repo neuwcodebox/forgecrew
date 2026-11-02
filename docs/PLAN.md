@@ -2,9 +2,9 @@
 
 ## 현재 상태
 
-- 단계: **P1·P2 진행 중. Worker 실행·제어·결과 게시 경로의 로컬 통합 검증 완료**.
+- 단계: **P1–P5 구현 진행 중. Worker 실행·게시·Launcher 전환 경로의 로컬 통합 검증 완료**.
 - shared·dispatcher·worker 패키지에 중앙 YAML·SQLite·HTTP·활성화 구간·PR 리뷰·전체 재동기화 폴링과 두 Provider 어댑터를 구현했다. Worker의 setup/run/doctor, 독립 Heartbeat·Lease 감시, 격리 clone, 세션 재개, 완료 저널·게시 재조정, stop·steer를 연결했다. 실행 직전 중앙 권한·원본 댓글 검증과 시스템 라벨 동기화도 구현했다.
-- `npm run check`: TypeScript 검사, Vitest 79개 테스트, tsdown 기반 세 패키지 JS 빌드, 빌드된 CLI·Dispatcher 프로세스 기동·SQLite·HTTP 인증·설정 재로드 smoke 검사를 통과했다. 로컬 검증 환경은 Linux / Node.js 24.22.1이다. Provider 프로세스와 GitHub 통합 Fixture를 실제 구독 실행과 구별한다. 사내 계정·실제 구독 모델 Turn·Windows 실제 사용자 환경·자동 업데이트 시험은 수행하지 않았다.
+- `npm run check`: TypeScript 검사, Vitest 90개 테스트, tsdown 기반 세 패키지 JS 빌드, 빌드된 CLI·Dispatcher 프로세스 기동·SQLite·HTTP 인증·설정 재로드 smoke 검사를 통과했다. 로컬 검증 환경은 Linux / Node.js 24.22.1이다. Provider 프로세스와 GitHub 통합 Fixture를 실제 구독 실행과 구별한다. 사내 계정·실제 구독 모델 Turn·Windows 실제 사용자 환경·실제 사내 npm 업데이트·로그인 자동 시작 시험은 수행하지 않았다. Launcher 자식 프로세스 전환·롤백·중복 기동·종료, drain과 패키지 격리 설치는 로컬 시험으로 확인했다.
 - Linux/Windows GitHub Actions 검사와 Dispatcher Dockerfile을 추가했다. CI 실행 결과와 Docker 이미지 빌드·실행은 로컬 smoke 결과와 별도로 확인한다.
 - 제품 정책과 배포 구조는 [SPEC](SPEC.md), 구체적인 동작 계약은 [TECH](TECH.md)를 기준으로 한다.
 - 외부 환경에서 제공할 값은 GHES 호스트·테스트 저장소·PAT, Dispatcher 주소, 사내 npm 레지스트리·scope다. Worker는 기존 `gh` 및 Codex/Claude 구독 로그인을 사용한다.
@@ -26,7 +26,7 @@
 - [ ] Codex App Server의 로그인·thread/turn·모델 카탈로그·effort·steer·interrupt·Auto Review를 실제 세션으로 시험한다.
 - [ ] Claude 공식 실행 파일의 구독 로그인·JSON 스트림·명시적 세션 재개·Auto 모드·무인 질문 처리·interrupt 후 steer 재개를 시험한다.
 - [x] Codex blocking 질문 보존·interrupt·종료와 Claude 무인 입력 경로를 프로세스 Fixture로 검증했다. 실제 구독 런타임 검증은 별도로 남아 있다.
-- [ ] Launcher IPC, Worker 로컬 저널, 종료·READY 계약의 최소 골격을 만든다. 운영 환경값을 코드에 박아 넣지 않는다.
+- [x] 버전 명시 Launcher IPC, Worker 저널, 종료·서비스 연결과 독립적인 로컬 READY, 안정화 관찰과 전환 포인터 복구를 구현했다.
 - [x] 중앙 YAML의 공통 스키마·명시적 비밀값 참조·Worker projection·revision 계약을 구현하고 예제 파싱·잘못된 후보 거절·원자적 활성화를 시험했다.
 - [ ] Codex와 Claude에서 기존 세션 재개 시 중앙 지침 교체가 실제 적용되는 경로를 시험한다. Claude의 프롬프트 snapshot 옵션과 긴 지침 전달도 포함한다.
 
@@ -112,12 +112,12 @@
 
 **선행:** 초기 Launcher/저널 구조와 안정된 실행 계약. 설치 준비 작업은 P2–P4와 병행한다.
 
-**상태:** 예정.
+**상태:** 진행 중. 로컬 Launcher·업데이트 경로 구현, 실제 OS 로그인·사내 npm 배포 검증 대기.
 
 - [ ] 사내 npm에 production Worker 패키지를 게시하고 깨끗한 PC에서 Node.js 외 개발 도구체인 없이 설치한다.
-- [ ] setup·start·stop·status·doctor, 사용자 로그인 자동 시작·중복 기동 방지를 구현한다.
-- [ ] 버전별 설치·무결성·호환성 확인, draining, Turn 경계·drain 한도 중단·재개를 구현한다.
-- [ ] Launcher 전환 journal·로컬 READY·안정화 관찰·lastKnownGood·롤백·실패 버전 cooldown을 시험한다.
+- [x] setup·start·stop·status·doctor와 중복 기동 방지를 구현하고 프로세스 Fixture·배포 패키지 smoke로 확인했다. Linux 사용자 서비스·Windows 로그온 작업의 등록/해제 어댑터를 추가했다. 실제 로그인 자동 시작은 미검증이다.
+- [x] 버전별 staging 설치·npm lock 무결성·Node/프로토콜·상태 schema 확인과 drain·한도 중단 후 Turn 복구를 구현했다. npm 설치 계약 Fixture와 실제 tarball 격리 설치를 구분해 검증했다.
+- [x] Launcher 전환 포인터·이전 포인터 복구·READY·안정화·lastKnownGood·롤백·cooldown을 자식 프로세스 시험으로 확인했다.
 - [ ] npm/Dispatcher 불통, 설치 실패, 새 버전 실행 오류, 포인터 교체 중 충돌, 상태 schema 변경을 구별한다.
 - [ ] Worker ID·설정 캐시·로컬 인증·작업 공간·미게시 결과가 교체 전후 유지되는지 확인한다. 코드 롤백에서 이전 schema 캐시를 사용할 수 있는지 확인한다.
 - [ ] 중앙 YAML의 마운트 파일 교체·잘못된 수정·재시작 필요 항목·Secret 비노출을 시험하고 설정 적용 상태를 진단할 수 있게 한다.
@@ -126,7 +126,7 @@
 
 **완료 기준:** Windows/Linux에서 실행 중 새 버전을 게시하면 사용자 개입 없이 교체·재시작·재연결된다. 실패해도 실행 가능한 정상 버전과 복구 가능한 상태가 남는다. Dispatcher 장애 때문에 정상 버전을 잘못 롤백하지 않는다.
 
-**근거:** 아직 없음.
+**근거:** `tests/launcher.test.ts`, `tests/runtime.test.ts`, `scripts/package-smoke.mjs`, [구현·검증 기록](history/2026-11-02-launcher-updates.md).
 
 ## P6. 첫 실사용 릴리스 검증
 
@@ -149,7 +149,7 @@
 
 ## 통합 검증 시나리오
 
-아래 표는 전체 제품 수용 시험이다. 현재 `tests/`의 79개 시험과 `scripts/smoke.mjs`는 설정·모델 선택·상태 전이·HTTP·기본 폴링·Provider 프로세스·Worker 실행/제어/게시·빌드 산출물 기동의 계약을 검증한다. 이 통과를 사내 GitHub·실제 구독 런타임·Windows 실제 사용자 환경·무인 업데이트의 종단간 시험 통과로 취급하지 않는다.
+아래 표는 전체 제품 수용 시험이다. 현재 `tests/`의 90개 시험과 `scripts/smoke.mjs`는 설정·모델 선택·상태 전이·HTTP·기본 폴링·Provider 프로세스·Worker 실행/제어/게시·빌드 산출물 기동의 계약을 검증한다. 이 통과를 사내 GitHub·실제 구독 런타임·Windows 실제 사용자 환경·무인 업데이트의 종단간 시험 통과로 취급하지 않는다.
 
 | ID | 시나리오 | 기대 결과 | 요구·단계 |
 |---|---|---|---|

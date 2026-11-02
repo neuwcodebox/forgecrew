@@ -2,7 +2,7 @@ import { readFile, readdir, rename, mkdir, unlink } from 'node:fs/promises';
 import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import type { LocalConfig } from './local.ts';
-import { atomicWrite, cacheProjection, LeaseClock, writeResult } from './local.ts';
+import { atomicWrite, cacheProjection, LeaseClock, writeResult, readLatestProjection } from './local.ts';
 import { DispatcherClient, DispatcherError } from './client.ts';
 import { GhClient, publishDelivery } from './github.ts';
 import { CodexProvider } from './providers/codex.ts';
@@ -32,6 +32,8 @@ export class WorkerRuntime {
   private projection:Projection|undefined;
   private catalogAt=0;
   private draining=false;
+  private stabilizing=process.env.FORGECREW_STABILIZING==='1';
+  private updateCheck:((p:Projection,signal:AbortSignal)=>Promise<void>)|undefined;
   private flushing:Promise<void>|undefined;
   constructor(config:LocalConfig,directory:string,dependencies:Dependencies={}) {
     this.config=config;this.directory=directory;this.client=dependencies.client??new DispatcherClient(config);
@@ -44,7 +46,7 @@ export class WorkerRuntime {
   private log(event:string,reason?:string) {console.log(JSON.stringify({event,workerId:this.config.id,...(reason?{reason}:{})}));}
   async initialize(registrationToken?:string) {
     const account=await this.github.account();
-    this.capabilities={id:this.config.id,githubLogin:account.login,githubId:String(account.id),version:'0.1.0',schemaVersions:[1],maxConcurrentSessions:this.config.maxConcurrentSessions,repositories:[],models:[],draining:false};
+    this.capabilities={id:this.config.id,githubLogin:account.login,githubId:String(account.id),version:process.env.FORGECREW_VERSION??'0.1.0',schemaVersions:[1],maxConcurrentSessions:this.config.maxConcurrentSessions,repositories:[],models:[],draining:false};
     let connected:Heartbeat;
     try {connected=await this.client.request<Heartbeat>('/v1/heartbeat',this.capabilities);}
     catch(error) {
@@ -75,7 +77,7 @@ export class WorkerRuntime {
   }
   async heartbeat() {
     if(!this.capabilities)throw new Error('worker_not_initialized');
-    this.capabilities.draining=this.draining;
+    this.capabilities.draining=this.draining||this.stabilizing;
     const response=await this.client.request<Heartbeat>('/v1/heartbeat',this.capabilities);
     // Lease renewal remains independent of model discovery, Git operations and new-config downloads.
     await Promise.all([...this.active.values()].map(async active=>{
@@ -180,27 +182,41 @@ export class WorkerRuntime {
     }
   }
   async work() {
-    if(!this.projection||this.draining)return;
+    if(!this.projection)return;
     await this.flushResults();
     const delivery=await this.client.request<{delivery:DeliveryClaim|null}>('/v1/deliveries/claim');
     if(delivery.delivery) {
       const d=delivery.delivery;
       await publishDelivery(this.directory,this.github,d,()=>this.client.request('/v1/deliveries/'+d.id+'/begin'),id=>this.client.request('/v1/deliveries/'+d.id+'/receipt',{githubId:id}));
     }
-    while(this.active.size<this.config.maxConcurrentSessions&&!this.draining) {
+    while(this.active.size<this.config.maxConcurrentSessions&&!this.draining&&!this.stabilizing) {
       const wall=Date.now(),mono=performance.now();const {claim}=await this.client.request<{claim:WorkClaim|null}>('/v1/claim');
       if(!claim)break;
+      if(this.draining||this.stabilizing){await this.client.request('/v1/release',{attemptId:claim.attemptId,generation:claim.generation});break;}
       this.start(claim,wall,mono);
     }
   }
   checkLeases() {for(const active of this.active.values())if(!active.clock.canRun())void this.interrupt(active,'lease_lost').catch(e=>this.log('interrupt_failed',code(e)));}
+  activate(){this.stabilizing=false;}
+  setUpdateHandler(handler:(p:Projection,signal:AbortSignal)=>Promise<void>){this.updateCheck=handler;}
+  async drain(timeout:number,signal?:AbortSignal) {
+    this.draining=true;
+    const deadline=Date.now()+timeout;
+    while(this.active.size&&Date.now()<deadline&&!signal?.aborted)await delay(Math.min(100,Math.max(1,deadline-Date.now())));
+    await this.settleControls();
+    await Promise.all([...this.active.values()].map(a=>this.interrupt(a,'shutdown')));
+    await this.flushResults().catch(()=>{});
+  }
   async settleControls() {await Promise.all([...this.controlTasks.values()]);}
   async run(signal:AbortSignal,registrationToken?:string) {
     await mkdir(this.directory,{recursive:true,mode:0o700});
+    this.projection=await readLatestProjection(this.directory).catch(()=>undefined);
+    if(this.projection?.payload.github.hostname!==this.config.hostname)this.projection=undefined;
+    for(const name of await readdir(join(this.directory,'journal')).catch(()=>[])){if(!name.endsWith('.json'))continue;const record=JSON.parse(await readFile(join(this.directory,'journal',name),'utf8')) as {result:unknown;resultHash:string};if(hash(record.result)!==record.resultHash)throw new Error('result_journal_corrupt');}
     process.send?.({type:'READY',protocolVersion:1});
-    let backoff=1000;
+    let backoff=1000,offlineUpdateAt=0;
     while(!signal.aborted) {
-      try{await this.initialize(registrationToken);break;}catch(error){this.log('worker_reconnecting',code(error));await delay(backoff,undefined,{signal}).catch(()=>{});backoff=Math.min(backoff*2,30000);}
+      try{await this.initialize(registrationToken);break;}catch(error){this.log('worker_reconnecting',code(error));if(this.projection&&!this.stabilizing&&!signal.aborted&&Date.now()>=offlineUpdateAt){offlineUpdateAt=Date.now()+this.projection.payload.updates.checkInterval;await this.updateCheck?.(this.projection,signal).catch(e=>this.log('update_retrying',code(e)));}await delay(backoff,undefined,{signal}).catch(()=>{});backoff=Math.min(backoff*2,30000);}
     }
     const loop=async(task:()=>Promise<void>|void,interval:()=>number)=>{
       let failureDelay=0;
@@ -211,6 +227,7 @@ export class WorkerRuntime {
       }
     };
     await Promise.all([
+      loop(async()=>{if(this.projection&&!this.stabilizing&&!this.draining)await this.updateCheck?.(this.projection,signal);},()=>this.projection?.payload.updates.checkInterval??60000),
       loop(()=>this.heartbeat(),()=>this.projection?.payload.runtime.heartbeatInterval??15000),
       loop(()=>this.work(),()=>this.projection?.payload.runtime.reconnect.initialDelay??1000),
       loop(()=>this.checkLeases(),()=>250),

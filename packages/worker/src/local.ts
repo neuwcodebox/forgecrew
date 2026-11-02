@@ -21,11 +21,16 @@ export async function atomicWrite(path:string,value:unknown) {
 export async function cacheProjection(directory:string,projection:Projection) {
   validateProjection(projection);
   await atomicWrite(join(directory,'cache','config','1',projection.configRevision+'.json'),projection);
+  await atomicWrite(join(directory,'cache','config','1','current.json'),{revision:projection.configRevision});
 }
 export async function readProjection(directory:string,revision:string):Promise<Projection> {
   if(!/^[0-9a-f]{64}$/.test(revision))throw new Error('invalid_config_revision');
   const p=JSON.parse(await readFile(join(directory,'cache','config','1',revision+'.json'),'utf8')) as Projection;
   validateProjection(p);if(p.configRevision!==revision)throw new Error('config_revision_mismatch');return p;
+}
+export async function readLatestProjection(directory:string):Promise<Projection|undefined> {
+  const pointer=await readFile(join(directory,'cache','config','1','current.json'),'utf8').then(s=>JSON.parse(s) as {revision:string},()=>undefined);
+  return pointer?readProjection(directory,pointer.revision):undefined;
 }
 export type LeaseContract={duration:number;interruptGrace:number};
 export class LeaseClock {

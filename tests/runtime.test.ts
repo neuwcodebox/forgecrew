@@ -107,4 +107,20 @@ describe('Dispatcher and Worker integration',()=>{
     const f=await setup();const path=join(f.dir,'worker.lock');const release=await acquireLock(path);
     await expect(acquireLock(path)).rejects.toThrow('worker_already_running');await release();const next=await acquireLock(path);await next();
   });
+  it('drains at the current Turn boundary while retaining queued inputs and pending delivery',async()=>{
+    const f=await setup(),started=deferred<void>(),result=deferred<Result>();
+    f.provider.factory=()=>{started.resolve();return {result:result.promise,interrupt:async()=>{},steer:async()=>{},close:async()=>{}};};
+    await f.runtime.work();await started.promise;f.s.enqueue(f.id,'comment','next','follow-up','writer',Date.now()+1);
+    const draining=f.runtime.drain(60000);result.resolve({kind:'completed',text:'finished before update'});await draining;
+    await f.runtime.work();expect(f.provider.requests).toHaveLength(1);expect(f.github.posted).toHaveLength(1);
+    expect(f.s.sqlite.prepare("SELECT status FROM inputs WHERE source_id='next'").get()).toEqual({status:'queued'});
+  });
+  it('releases an interrupted Turn for recovery when the update drain deadline is reached',async()=>{
+    const f=await setup(),started=deferred<void>(),result=deferred<Result>();
+    f.provider.factory=()=>{started.resolve();return {result:result.promise,interrupt:async()=>{result.reject(new Error('provider_interrupted'));},steer:async()=>{},close:async()=>{}};};
+    await f.runtime.work();await started.promise;const claim=f.provider.requests[0]!.claim;await f.runtime.drain(0);
+    expect(f.runtime.active.size).toBe(0);expect(f.s.sqlite.prepare('SELECT status FROM turns WHERE id=?').get(claim.turnId)).toEqual({status:'recovering'});
+    expect(f.github.posted).toHaveLength(0);
+  });
+
 });
