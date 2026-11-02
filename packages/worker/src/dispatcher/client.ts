@@ -57,7 +57,10 @@ export class DispatcherClient implements Dispatcher {
     return this.request('/v1/release', attempt);
   }
   restartSteer(attempt: AttemptIdentity, controlId: string) {
-    return this.request<{ claim: WorkClaim }>('/v1/steer-restart', { ...attempt, controlId });
+    return this.request<{ claim: WorkClaim | null }>('/v1/steer-restart', {
+      ...attempt,
+      controlId,
+    });
   }
   acknowledgeControl(id: string) {
     return this.request('/v1/controls/' + id + '/ack');

@@ -25,7 +25,7 @@ export interface Dispatcher {
   renewAttempt(attempt: AttemptIdentity): Promise<AttemptLease>;
   cancelAttempt(attempt: AttemptIdentity): Promise<unknown>;
   releaseAttempt(attempt: AttemptIdentity): Promise<unknown>;
-  restartSteer(attempt: AttemptIdentity, controlId: string): Promise<{ claim: WorkClaim }>;
+  restartSteer(attempt: AttemptIdentity, controlId: string): Promise<{ claim: WorkClaim | null }>;
   acknowledgeControl(controlId: string): Promise<unknown>;
   complete(attempt: AttemptIdentity, result: Result): Promise<unknown>;
   claimDelivery(): Promise<{ delivery: DeliveryClaim | null }>;

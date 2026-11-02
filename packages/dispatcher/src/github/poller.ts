@@ -156,6 +156,7 @@ export class Poller {
               (review ? 'review_comment:' : 'comment:') + comment.id,
               control,
               created,
+              config.output,
             );
         } else
           this.store.sessions.enqueue(

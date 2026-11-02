@@ -2,7 +2,7 @@ import type { Result } from '../../../shared/src/types.ts';
 import type { DeliveryClaim, WorkClaim, WorkSession } from '../../../shared/src/protocol.ts';
 
 export type GitHubAccount = { id: number; login: string };
-export type GitHubComment = { id: number; body: string; user: GitHubAccount };
+export type GitHubComment = { id: number; body: string; user: GitHubAccount | null };
 
 export interface GitHubAccess {
   account(signal?: AbortSignal): Promise<GitHubAccount>;

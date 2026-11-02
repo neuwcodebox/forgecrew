@@ -174,6 +174,16 @@ export class DeliveryRepository {
     return true;
   }
 
+  notice(sessionId: string, key: string, text: string, output: RunConfig['payload']['output']) {
+    const turnId = 'notice:' + key;
+    if (this.idsForTurn(turnId).length) return;
+    this.create(
+      { session_id: sessionId, turn_id: turnId },
+      { kind: 'completed', text, origin: 'runtime' },
+      output,
+    );
+  }
+
   idsForTurn(turnId: string): string[] {
     return (
       this.database.sqlite

@@ -419,7 +419,13 @@ describe('Dispatcher and Worker integration', () => {
     await started.promise;
     const a = [...f.runtime.attempts.active.values()][0]!;
     f.s.sessions.enqueue(f.id, 'comment', 'next', 'follow-up', 'writer', Date.now() + 1);
-    f.s.executions.addControl(f.id, 'stop_comment', { kind: 'stop' }, Date.now());
+    f.s.executions.addControl(
+      f.id,
+      'stop_comment',
+      { kind: 'stop' },
+      Date.now(),
+      f.configs.current.output,
+    );
     await f.runtime.heartbeat();
     await a.task;
     await f.runtime.controls.settle();
@@ -464,6 +470,7 @@ describe('Dispatcher and Worker integration', () => {
       'steer_comment',
       { kind: 'steer', text: 'use SSO' },
       Date.now(),
+      f.configs.current.output,
     );
     await f.runtime.heartbeat();
     await second.promise;
@@ -474,6 +481,161 @@ describe('Dispatcher and Worker integration', () => {
     expect(next.generation).toBe(previous.generation + 1);
     expect(next.steering?.[0]?.text).toBe('use SSO');
     expect(f.s.sqlite.prepare('SELECT COUNT(*) AS n FROM turns').get()).toEqual({ n: 1 });
+  });
+  it('serializes steering commands for one active Codex Turn', async () => {
+    const f = await setup(),
+      started = deferred<void>(),
+      result = deferred<Result>(),
+      firstEntered = deferred<void>(),
+      firstFinished = deferred<void>();
+    const received: string[] = [];
+    f.provider.factory = () => {
+      started.resolve();
+      return {
+        result: result.promise,
+        interrupt: async () => {
+          result.reject(new Error('provider_interrupted'));
+        },
+        steer: async (text) => {
+          received.push(text);
+          if (received.length === 1) {
+            firstEntered.resolve();
+            await firstFinished.promise;
+          }
+        },
+        close: async () => {},
+      };
+    };
+    await f.runtime.work();
+    await started.promise;
+    f.s.executions.addControl(
+      f.id,
+      'steer-1',
+      { kind: 'steer', text: 'first' },
+      Date.now(),
+      f.configs.current.output,
+    );
+    f.s.executions.addControl(
+      f.id,
+      'steer-2',
+      { kind: 'steer', text: 'second' },
+      Date.now(),
+      f.configs.current.output,
+    );
+    await f.runtime.heartbeat();
+    await firstEntered.promise;
+    try {
+      await nextEventLoop();
+      expect(received).toEqual(['first']);
+    } finally {
+      firstFinished.resolve();
+      await f.runtime.controls.settle();
+      result.resolve({ kind: 'completed', text: 'answer' });
+      await Promise.all([...f.runtime.attempts.active.values()].map((attempt) => attempt.task));
+    }
+    expect(received).toEqual(['first', 'second']);
+  });
+  it('prioritizes stop over a concurrent Claude steering restart without starting another Provider', async () => {
+    const f = await setup({ engine: 'claude' }),
+      started = deferred<void>(),
+      result = deferred<Result>();
+    f.provider.factory = () => {
+      started.resolve();
+      return {
+        result: result.promise,
+        interrupt: async () => {
+          result.reject(new Error('provider_interrupted'));
+        },
+        steer: async () => {},
+        close: async () => {},
+      };
+    };
+    await f.runtime.work();
+    await started.promise;
+    f.s.executions.addControl(
+      f.id,
+      'steer',
+      { kind: 'steer', text: 'direction' },
+      Date.now(),
+      f.configs.current.output,
+    );
+    f.s.executions.addControl(f.id, 'stop', { kind: 'stop' }, Date.now(), f.configs.current.output);
+    await f.runtime.heartbeat();
+    await f.runtime.controls.settle();
+    expect(f.s.sqlite.prepare('SELECT status FROM turns').get()).toEqual({ status: 'cancelled' });
+    expect(f.provider.requests).toHaveLength(1);
+  });
+  it('posts an inactive-control notice as automation under the coworker account without changing the next Turn', async () => {
+    const f = await setup();
+    f.s.executions.addControl(
+      f.id,
+      'idle-stop',
+      { kind: 'stop' },
+      Date.now(),
+      f.configs.current.output,
+    );
+    await f.runtime.work();
+    await Promise.all([...f.runtime.attempts.active.values()].map((attempt) => attempt.task));
+    expect(f.github.posted[0]?.body).toContain('/ai stop');
+    expect(f.github.posted[0]?.body).toContain(
+      f.configs.current.output.automationAttribution.trim(),
+    );
+    expect(f.github.posted[0]?.user.login).toBe('coworker');
+    expect(f.provider.requests).toHaveLength(1);
+    expect(f.s.sqlite.prepare('SELECT status FROM turns').get()).toEqual({ status: 'completed' });
+    expect(f.s.executions.pendingControls(f.local.id)).toEqual([]);
+  });
+  it('interrupts a Turn immediately when stop arrives while an earlier steering RPC is blocked', async () => {
+    const f = await setup(),
+      started = deferred<void>(),
+      result = deferred<Result>(),
+      steering = deferred<void>(),
+      releaseSteer = deferred<void>();
+    let interrupted = false;
+    f.provider.factory = () => {
+      started.resolve();
+      return {
+        result: result.promise,
+        interrupt: async () => {
+          interrupted = true;
+          result.reject(new Error('provider_interrupted'));
+          releaseSteer.resolve();
+        },
+        steer: async () => {
+          steering.resolve();
+          await releaseSteer.promise;
+        },
+        close: async () => {},
+      };
+    };
+    await f.runtime.work();
+    await started.promise;
+    f.s.executions.addControl(
+      f.id,
+      'steer-blocked',
+      { kind: 'steer', text: 'direction' },
+      Date.now(),
+      f.configs.current.output,
+    );
+    await f.runtime.heartbeat();
+    await steering.promise;
+    f.s.executions.addControl(
+      f.id,
+      'stop-priority',
+      { kind: 'stop' },
+      Date.now(),
+      f.configs.current.output,
+    );
+    await f.runtime.heartbeat();
+    try {
+      await nextEventLoop();
+      expect(interrupted).toBe(true);
+    } finally {
+      releaseSteer.resolve();
+      await f.runtime.controls.settle();
+      await Promise.all([...f.runtime.attempts.active.values()].map((attempt) => attempt.task));
+    }
+    expect(f.s.sqlite.prepare('SELECT status FROM turns').get()).toEqual({ status: 'cancelled' });
   });
   it('refuses a forged run snapshot before invoking a Provider', async () => {
     const f = await setup();
@@ -665,6 +827,7 @@ describe('Dispatcher and Worker integration', () => {
         'stop_first_worker',
         { kind: 'stop' },
         Date.now(),
+        f.configs.current.output,
       );
       await f.runtime.heartbeat();
       await f.runtime.controls.settle();

@@ -12,6 +12,7 @@ export class ControlProcessor {
   private readonly attempts: Pick<AttemptRunner, 'active' | 'interrupt' | 'start'>;
   private readonly log: RuntimeLog;
   private readonly pending = new Map<string, Promise<void>>();
+  private readonly queues = new Map<string, Promise<void>>();
   constructor(
     directory: string,
     dispatcher: Pick<Dispatcher, 'restartSteer' | 'acknowledgeControl'>,
@@ -24,12 +25,24 @@ export class ControlProcessor {
     this.log = log;
   }
   dispatch(messages: ControlMessage[]) {
-    for (const message of messages) {
+    const prioritized = [...messages].sort(
+      (a, b) => Number(b.control.kind === 'stop') - Number(a.control.kind === 'stop'),
+    );
+    for (const message of prioritized) {
       if (this.pending.has(message.id)) continue;
-      const task = this.apply(message)
+      const previous =
+        message.control.kind === 'stop'
+          ? Promise.resolve()
+          : (this.queues.get(message.attemptId) ?? Promise.resolve());
+      const task = previous
+        .then(() => this.apply(message))
         .catch((error) => this.log('control_failed', errorCode(error)))
-        .finally(() => this.pending.delete(message.id));
+        .finally(() => {
+          this.pending.delete(message.id);
+          if (this.queues.get(message.attemptId) === task) this.queues.delete(message.attemptId);
+        });
       this.pending.set(message.id, task);
+      this.queues.set(message.attemptId, task);
     }
   }
   async settle() {
@@ -39,13 +52,19 @@ export class ControlProcessor {
     const active = this.attempts.active.get(message.attemptId);
     if (!active) return;
     const path = join(this.directory, 'controls', message.id + '.json');
+    if (message.control.kind === 'stop') {
+      await this.attempts.interrupt(active, 'stop');
+      await atomicWrite(path, { applied: true });
+      await this.dispatcher.acknowledgeControl(message.id);
+      return;
+    }
     const applied = await readFile(path, 'utf8').then(
       () => true,
       () => false,
     );
     if (!applied) {
-      if (message.control.kind === 'stop') await this.attempts.interrupt(active, 'stop');
-      else if (active.claim.runConfig.engine === 'claude') {
+      if (active.reason) return;
+      if (active.claim.runConfig.engine === 'claude') {
         await this.attempts.interrupt(active, 'steer');
         const wall = Date.now(),
           mono = performance.now();
@@ -53,7 +72,7 @@ export class ControlProcessor {
           { attemptId: active.claim.attemptId, generation: active.claim.generation },
           message.id,
         );
-        this.attempts.start(next.claim, wall, mono);
+        if (next.claim) this.attempts.start(next.claim, wall, mono);
       } else {
         if (!active.run) throw new Error('provider_not_started');
         await active.run.steer(message.control.text, message.id);

@@ -16,12 +16,12 @@ export class ExecutionRepository {
   private readonly database: StorageContext;
   private readonly workers: Pick<WorkerRegistry, 'candidates'>;
   private readonly sessions: Pick<SessionRepository, 'get'>;
-  private readonly deliveries: Pick<DeliveryRepository, 'create' | 'idsForTurn'>;
+  private readonly deliveries: Pick<DeliveryRepository, 'create' | 'idsForTurn' | 'notice'>;
   constructor(
     database: StorageContext,
     workers: Pick<WorkerRegistry, 'candidates'>,
     sessions: Pick<SessionRepository, 'get'>,
-    deliveries: Pick<DeliveryRepository, 'create' | 'idsForTurn'>,
+    deliveries: Pick<DeliveryRepository, 'create' | 'idsForTurn' | 'notice'>,
   ) {
     this.database = database;
     this.workers = workers;
@@ -29,27 +29,89 @@ export class ExecutionRepository {
     this.deliveries = deliveries;
   }
 
-  addControl(session: string, source: string, control: Control, createdAt: number) {
-    const attempt = this.database.sqlite
-      .prepare(
-        'SELECT * FROM attempts WHERE session_id=? AND started_at<=? AND (ended_at IS NULL OR ended_at>=?) ORDER BY started_at DESC LIMIT 1',
-      )
-      .get(session, createdAt, createdAt) as Attempt | undefined;
+  addControl(
+    session: string,
+    source: string,
+    control: Control,
+    createdAt: number,
+    output: Config['output'],
+  ) {
     this.database.sqlite
-      .prepare('INSERT OR IGNORE INTO controls VALUES (?,?,?,?,?)')
-      .run(
-        hash([session, source]),
-        session,
-        attempt?.id ?? null,
-        JSON.stringify(control),
-        attempt && attempt.status !== 'terminal' ? 'pending' : 'not_applied',
-      );
+      .transaction(() => {
+        const activation = this.database.sqlite
+          .prepare('SELECT min(opened_at) AS at FROM activation_windows WHERE session_id=?')
+          .get(session) as { at: number | null };
+        const initial = this.database.sqlite
+          .prepare(
+            "SELECT created_at AS at FROM inputs WHERE session_id=? AND source_kind='initial'",
+          )
+          .get(session) as { at: number } | undefined;
+        const firstActivation = activation.at ?? initial?.at;
+        if (firstActivation === undefined || createdAt < firstActivation) return;
+        const attempt = this.database.sqlite
+          .prepare(
+            'SELECT * FROM attempts WHERE session_id=? AND started_at<=? AND (ended_at IS NULL OR ended_at>=?) ORDER BY started_at DESC,rowid DESC LIMIT 1',
+          )
+          .get(session, createdAt, createdAt) as Attempt | undefined;
+        const id = hash([session, source]);
+        const pending = attempt && attempt.status !== 'terminal';
+        const inserted = this.database.sqlite
+          .prepare('INSERT OR IGNORE INTO controls VALUES (?,?,?,?,?)')
+          .run(
+            id,
+            session,
+            attempt?.id ?? null,
+            JSON.stringify(control),
+            pending ? 'pending' : 'not_applied',
+          );
+        if (inserted.changes && !pending) this.controlOutcomeNotice(session, id, control, output);
+      })
+      .immediate();
+  }
+
+  private controlOutcomeNotice(
+    session: string,
+    id: string,
+    control: Control,
+    output: Config['output'],
+    uncertain = false,
+  ) {
+    this.deliveries.notice(
+      session,
+      id + (uncertain ? ':unconfirmed' : ':not-applied'),
+      uncertain
+        ? `/ai ${control.kind}: 대상 실행이 종료되어 명령 적용 완료를 확인하지 못했습니다. 다음 Turn에는 다시 적용하지 않습니다.`
+        : `/ai ${control.kind}: 대상 실행이 없거나 이미 종료되어 명령을 적용하지 않았습니다. 다음 Turn에는 적용하지 않습니다.`,
+      output,
+    );
+  }
+
+  private finishControls(attempt: Attempt, stopped: boolean) {
+    const pending = this.database.sqlite
+      .prepare(
+        "SELECT id,payload FROM controls WHERE attempt_id=? AND status='pending' ORDER BY rowid",
+      )
+      .all(attempt.id) as { id: string; payload: string }[];
+    if (!pending.length) return;
+    const turn = this.database.sqlite
+      .prepare('SELECT run_config FROM turns WHERE id=?')
+      .get(attempt.turn_id) as { run_config: string };
+    const output = (JSON.parse(turn.run_config) as RunConfig).payload.output;
+    for (const message of pending) {
+      const control = JSON.parse(message.payload) as Control;
+      const applied = stopped && control.kind === 'stop';
+      this.database.sqlite
+        .prepare('UPDATE controls SET status=? WHERE id=?')
+        .run(applied ? 'applied' : stopped ? 'not_applied' : 'unconfirmed', message.id);
+      if (!applied)
+        this.controlOutcomeNotice(attempt.session_id, message.id, control, output, !stopped);
+    }
   }
 
   pendingControls(worker: string) {
     return this.database.sqlite
       .prepare(
-        "SELECT c.id,c.attempt_id,c.payload FROM controls c JOIN attempts a ON a.id=c.attempt_id WHERE a.worker_id=? AND a.status IN ('running','stopping') AND c.status='pending'",
+        "SELECT c.id,c.attempt_id,c.payload FROM controls c JOIN attempts a ON a.id=c.attempt_id WHERE a.worker_id=? AND a.status IN ('running','stopping') AND c.status='pending' ORDER BY c.rowid",
       )
       .all(worker)
       .map((row) => {
@@ -61,9 +123,17 @@ export class ExecutionRepository {
   ackControl(worker: string, id: string) {
     this.database.sqlite
       .prepare(
-        "UPDATE controls SET status='applied' WHERE id=? AND attempt_id IN (SELECT id FROM attempts WHERE worker_id=?)",
+        "UPDATE controls SET status='applied' WHERE status IN ('pending','unconfirmed') AND id=? AND attempt_id IN (SELECT id FROM attempts WHERE worker_id=?)",
       )
       .run(id, worker);
+  }
+
+  private stopRequested(attemptId: string): boolean {
+    return !!this.database.sqlite
+      .prepare(
+        "SELECT 1 FROM controls WHERE attempt_id=? AND json_extract(payload,'$.kind')='stop'",
+      )
+      .get(attemptId);
   }
 
   private steering(turnId: string): { id: string; text: string }[] {
@@ -101,7 +171,7 @@ export class ExecutionRepository {
                 .get(recovering.input_id) as Input)
             : (this.database.sqlite
                 .prepare(
-                  "SELECT * FROM inputs WHERE session_id=? AND status='queued' ORDER BY created_at,source_id LIMIT 1",
+                  "SELECT * FROM inputs WHERE session_id=? AND status='queued' ORDER BY created_at,CASE WHEN source_kind='initial' THEN 0 ELSE 1 END,length(source_id),source_id LIMIT 1",
                 )
                 .get(session.id) as Input | undefined);
           if (!input) continue;
@@ -218,12 +288,17 @@ export class ExecutionRepository {
       .transaction(() => {
         const a = this.owned(id, worker, generation);
         if (a.status === 'terminal') return;
+        if (this.stopRequested(id)) {
+          this.cancel(id, worker, generation);
+          return;
+        }
         this.database.sqlite
           .prepare("UPDATE attempts SET status='terminal',ended_at=? WHERE id=?")
           .run(this.database.now(), id);
         this.database.sqlite
           .prepare("UPDATE turns SET status='recovering' WHERE id=?")
           .run(a.turn_id);
+        this.finishControls(a, false);
       })
       .immediate();
   }
@@ -234,6 +309,10 @@ export class ExecutionRepository {
         const a = this.owned(id, worker, generation);
         if (a.status === 'terminal' || a.lease_until <= this.database.now())
           throw new ContractError('lease_expired');
+        if (this.stopRequested(id)) {
+          this.cancel(id, worker, generation);
+          return false;
+        }
         const input = this.database.sqlite
           .prepare('SELECT i.* FROM inputs i JOIN turns t ON t.input_id=i.id WHERE t.id=?')
           .get(a.turn_id) as Input;
@@ -260,6 +339,7 @@ export class ExecutionRepository {
           this.database.sqlite
             .prepare('UPDATE sessions SET blocked_reason=? WHERE id=?')
             .run(decision.reason ?? 'input_verification_pending', a.session_id);
+        this.finishControls(a, false);
         if (decision.reason === 'session_disabled')
           this.database.sqlite.prepare('UPDATE sessions SET active=0 WHERE id=?').run(a.session_id);
         return false;
@@ -271,6 +351,10 @@ export class ExecutionRepository {
     return this.database.sqlite
       .transaction(() => {
         const previous = this.owned(id, worker, generation);
+        if (this.stopRequested(previous.id)) {
+          this.cancel(id, worker, generation);
+          return null;
+        }
         const mapped = this.database.sqlite
           .prepare('SELECT attempt_id FROM steer_restarts WHERE control_id=?')
           .get(controlId) as { attempt_id: string } | undefined;
@@ -316,6 +400,9 @@ export class ExecutionRepository {
             .prepare("UPDATE controls SET status='applied' WHERE id=?")
             .run(controlId);
           this.database.sqlite
+            .prepare("UPDATE controls SET attempt_id=? WHERE attempt_id=? AND status='pending'")
+            .run(nextId, id);
+          this.database.sqlite
             .prepare('INSERT INTO steer_restarts VALUES (?,?)')
             .run(controlId, nextId);
           a = this.database.sqlite
@@ -330,6 +417,13 @@ export class ExecutionRepository {
         const input = this.database.sqlite
           .prepare('SELECT * FROM inputs WHERE id=?')
           .get(turn.input_id) as Input;
+        if (!mapped)
+          this.deliveries.notice(
+            a.session_id,
+            controlId + ':restart',
+            '/ai steer: 실행을 중단한 뒤 추가 지시와 함께 같은 Turn을 새 Attempt로 이어갑니다.',
+            (JSON.parse(turn.run_config!) as RunConfig).payload.output,
+          );
         return {
           attemptId: a.id,
           turnId: a.turn_id,
@@ -361,6 +455,7 @@ export class ExecutionRepository {
             "UPDATE inputs SET status='consumed' WHERE id=(SELECT input_id FROM turns WHERE id=?)",
           )
           .run(a.turn_id);
+        this.finishControls(a, true);
       })
       .immediate();
   }
@@ -391,29 +486,38 @@ export class ExecutionRepository {
             "UPDATE inputs SET status='consumed' WHERE id=(SELECT input_id FROM turns WHERE id=?)",
           )
           .run(attempt.turn_id);
-        return this.deliveries.create(attempt, result, run.payload.output);
+        const deliveries = this.deliveries.create(attempt, result, run.payload.output);
+        this.finishControls(attempt, false);
+        return deliveries;
       })
       .immediate();
   }
 
   expire() {
-    const expired = this.database.sqlite
-      .prepare(
-        "SELECT * FROM attempts WHERE status IN ('running','stopping') AND lease_until+reassign_grace<=?",
-      )
-      .all(this.database.now()) as Attempt[];
-    for (const a of expired) {
-      const stopped = this.database.sqlite
-        .prepare(
-          "SELECT 1 FROM controls WHERE attempt_id=? AND json_extract(payload,'$.kind')='stop'",
-        )
-        .get(a.id);
-      this.database.sqlite
-        .prepare("UPDATE attempts SET status='terminal',ended_at=? WHERE id=?")
-        .run(this.database.now(), a.id);
-      this.database.sqlite
-        .prepare('UPDATE turns SET status=? WHERE id=?')
-        .run(stopped ? 'cancelled' : 'recovering', a.turn_id);
-    }
+    this.database.sqlite
+      .transaction(() => {
+        const expired = this.database.sqlite
+          .prepare(
+            "SELECT * FROM attempts WHERE status IN ('running','stopping') AND lease_until+reassign_grace<=?",
+          )
+          .all(this.database.now()) as Attempt[];
+        for (const a of expired) {
+          const stopped = this.stopRequested(a.id);
+          this.database.sqlite
+            .prepare("UPDATE attempts SET status='terminal',ended_at=? WHERE id=?")
+            .run(this.database.now(), a.id);
+          this.database.sqlite
+            .prepare('UPDATE turns SET status=? WHERE id=?')
+            .run(stopped ? 'cancelled' : 'recovering', a.turn_id);
+          if (stopped)
+            this.database.sqlite
+              .prepare(
+                "UPDATE inputs SET status='consumed' WHERE id=(SELECT input_id FROM turns WHERE id=?)",
+              )
+              .run(a.turn_id);
+          this.finishControls(a, stopped);
+        }
+      })
+      .immediate();
   }
 }

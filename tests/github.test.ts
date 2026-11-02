@@ -56,3 +56,68 @@ describe('observable direct GitHub writes', () => {
     expect(reads).toBe(0);
   });
 });
+
+function conversationFixture(kind: string, body: string | null = 'request') {
+  const request = claim()!;
+  request.session.kind = 'pull';
+  request.input.source_kind = kind;
+  request.input.source_id = '42';
+  const github = new GhClient(request.session.host);
+  github.api = async <T>(endpoint: string) => {
+    if (endpoint.endsWith('/permission')) return { permission: 'write' } as T;
+    return {
+      title: 'request',
+      body: kind === 'initial' ? body : 'context',
+      html_url: 'https://github.example.internal/team/project-a/pull/1',
+    } as T;
+  };
+  github.pages = async <T>(endpoint: string) => {
+    const stream = endpoint.includes('/reviews?')
+      ? 'review'
+      : endpoint.includes('/pulls/')
+        ? 'review_comment'
+        : 'comment';
+    return (
+      stream === kind && body !== null ? [{ id: 42, body, user: { id: 123, login: 'writer' } }] : []
+    ) as T[];
+  };
+  return { request, github };
+}
+describe('last-moment GitHub input verification', () => {
+  it.each(['initial', 'comment', 'review', 'review_comment'])(
+    'does not execute a changed %s source',
+    async (kind) => {
+      const { request, github } = conversationFixture(kind, 'edited after claim');
+      await expect(github.context(request)).rejects.toThrow('input_changed_before_start');
+    },
+  );
+  it.each(['initial', 'comment', 'review', 'review_comment'])(
+    'does not execute a deleted %s source',
+    async (kind) => {
+      const { request, github } = conversationFixture(kind, null);
+      await expect(github.context(request)).rejects.toThrow('input_deleted');
+    },
+  );
+  it.each(['initial', 'comment', 'review', 'review_comment'])(
+    'preserves an unchanged %s source and its conversation context',
+    async (kind) => {
+      const { request, github } = conversationFixture(kind);
+      expect(JSON.parse(await github.context(request)).issue.title).toBe('request');
+    },
+  );
+  it('ignores comments whose GitHub account has been deleted while reconciling a delivery', async () => {
+    const request = claim()!,
+      github = new GhClient(request.session.host);
+    github.comments = async () => [{ id: 42, body: 'prior comment', user: null }];
+    await expect(
+      github.findDelivery({
+        id: 'delivery',
+        session: request.session,
+        body: 'answer',
+        body_hash: 'hash',
+        authors: ['123'],
+        leaseDuration: 90000,
+      }),
+    ).resolves.toBeUndefined();
+  });
+});

@@ -80,18 +80,17 @@ export class GhClient implements GitHubGateway {
       signal,
     );
     if (!canWrite(permission)) throw new Error('requester_no_longer_has_write_access');
-    const issue = await this.api<{ title: string; body: string; html_url: string }>(
+    const issue = await this.api<{ title: string; body: string | null; html_url: string }>(
       `repos/${claim.session.repository}/issues/${claim.session.number}`,
       'GET',
       undefined,
       signal,
     );
     const comments = await this.comments(claim.session, signal);
-    if (claim.input.source_kind === 'comment') {
-      const source = comments.find((c) => String(c.id) === claim.input.source_id);
-      if (!source) throw new Error('input_deleted');
-      if (source.body !== claim.input.body) throw new Error('input_changed_before_start');
-    }
+    let source: { body: string | null } | undefined;
+    if (claim.input.source_kind === 'initial') source = issue;
+    if (claim.input.source_kind === 'comment')
+      source = comments.find((comment) => String(comment.id) === claim.input.source_id);
     let pull: unknown;
     if (claim.session.kind === 'pull') {
       const details = await this.api(
@@ -100,16 +99,22 @@ export class GhClient implements GitHubGateway {
         undefined,
         signal,
       );
-      const reviews = await this.pages(
+      const reviews = await this.pages<{ id: number; body: string | null }>(
         `repos/${claim.session.repository}/pulls/${claim.session.number}/reviews?per_page=100`,
         signal,
       );
-      const reviewComments = await this.pages(
+      const reviewComments = await this.pages<{ id: number; body: string | null }>(
         `repos/${claim.session.repository}/pulls/${claim.session.number}/comments?per_page=100`,
         signal,
       );
+      if (claim.input.source_kind === 'review')
+        source = reviews.find((review) => String(review.id) === claim.input.source_id);
+      if (claim.input.source_kind === 'review_comment')
+        source = reviewComments.find((comment) => String(comment.id) === claim.input.source_id);
       pull = { details, reviews, reviewComments };
     }
+    if (!source?.body?.trim()) throw new Error('input_deleted');
+    if (source.body !== claim.input.body) throw new Error('input_changed_before_start');
     return JSON.stringify({ issue, comments, pull });
   }
   async verifyOutput(
@@ -162,6 +167,7 @@ export class GhClient implements GitHubGateway {
   ): Promise<GitHubComment | undefined> {
     return (await this.comments(delivery.session, signal)).find(
       (comment) =>
+        comment.user != null &&
         delivery.authors.includes(String(comment.user.id)) &&
         hash(comment.body) === delivery.body_hash &&
         comment.body.includes(`<!-- forgecrew:delivery=${delivery.id} -->`),
