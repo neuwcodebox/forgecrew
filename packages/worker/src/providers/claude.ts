@@ -88,6 +88,10 @@ export class ClaudeProvider implements Provider {
           sessionSaved=sessionSaved.then(()=>request.onSession({id:message.session_id,engine:'claude',workspace:request.workspace}));
           void sessionSaved.catch(()=>fail(new Error('claude_session_persistence_failed')));
         }
+        if(message.type==='assistant'&&message.error&&!settled){
+          const error=message.error;
+          fail(new Error(error==='rate_limit'?'claude_rate_limited':['authentication_failed','oauth_org_not_allowed','account_on_hold','verification_required','billing_error'].includes(error)?'claude_auth_required':'claude_turn_failed'));return;
+        }
         if(message.type==='result'&&!settled) {
           if(interruptRequested||request.signal.aborted) {fail(new Error('provider_interrupted'));return;}
           const used=Object.keys(message.modelUsage??{});

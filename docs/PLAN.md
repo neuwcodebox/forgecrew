@@ -4,7 +4,7 @@
 
 - 단계: **P1–P5 구현 진행 중. Worker 실행·게시·Launcher 전환 경로의 로컬 통합 검증 완료**.
 - shared·dispatcher·worker 패키지에 중앙 YAML·SQLite·HTTP·활성화 구간·PR 리뷰·전체 재동기화 폴링과 두 Provider 어댑터를 구현했다. Worker의 setup/run/doctor, 독립 Heartbeat·Lease 감시, 격리 clone, 세션 재개, 완료 저널·게시 재조정, stop·steer를 연결했다. 실행 직전 중앙 권한·원본 댓글 검증과 시스템 라벨 동기화도 구현했다.
-- `npm run check`: TypeScript 검사, Vitest 90개 테스트, tsdown 기반 세 패키지 JS 빌드, 빌드된 CLI·Dispatcher 프로세스 기동·SQLite·HTTP 인증·설정 재로드 smoke 검사를 통과했다. 로컬 검증 환경은 Linux / Node.js 24.22.1이다. Provider 프로세스와 GitHub 통합 Fixture를 실제 구독 실행과 구별한다. 사내 계정·실제 구독 모델 Turn·Windows 실제 사용자 환경·실제 사내 npm 업데이트·로그인 자동 시작 시험은 수행하지 않았다. Launcher 자식 프로세스 전환·롤백·중복 기동·종료, drain과 패키지 격리 설치는 로컬 시험으로 확인했다.
+- `npm run check`: TypeScript 검사, Vitest 103개 테스트, tsdown 기반 세 패키지 JS 빌드, 빌드된 CLI·Dispatcher 프로세스 기동·SQLite·HTTP 인증·설정 재로드 smoke 검사를 통과했다. 로컬 검증 환경은 Linux / Node.js 24.22.1이다. Provider 프로세스와 GitHub 통합 Fixture를 실제 구독 실행과 구별한다. 사내 계정·실제 구독 모델 Turn·Windows 실제 사용자 환경·실제 사내 npm 업데이트·로그인 자동 시작 시험은 수행하지 않았다. Launcher 자식 프로세스 전환·롤백·중복 기동·종료, drain과 패키지 격리 설치는 로컬 시험으로 확인했다.
 - Linux/Windows GitHub Actions 검사와 Dispatcher Dockerfile을 추가했다. 코드 `4ddc3c8`의 [CI 41451169932](https://github.com/neuwcodebox/forgecrew/actions/runs/41451169932)에서 Linux/Windows의 90개 테스트·빌드·배포 패키지 smoke와 Docker 검사가 모두 통과했다. Docker 검사는 비루트/읽기 전용 실행·원자적 YAML 교체·SQLite 재시작·정지 볼륨 백업/복원을 포함한다.
 - 제품 정책과 배포 구조는 [SPEC](SPEC.md), 구체적인 동작 계약은 [TECH](TECH.md)를 기준으로 한다.
 - 외부 환경에서 제공할 값은 GHES 호스트·테스트 저장소·PAT, Dispatcher 주소, 사내 npm 레지스트리·scope다. Worker는 기존 `gh` 및 Codex/Claude 구독 로그인을 사용한다.
@@ -71,11 +71,11 @@
 - [x] Worker ID·플랫폼 인증·로컬 GitHub 접근 저장소·모델 목록 보고를 연결하고 등록·배정 계약을 검증했다.
 - [x] 숫자 버전·최신 모델·접근·effort·Auto Review·슬롯 배정을 시험했다. 최신 모델 보유 Worker가 바쁠 때 구버전으로 낮추지 않는다.
 - [x] 원자적 Claim·Lease·generation과 실행/설정 조회에 독립적인 Heartbeat·갱신·제어 처리를 구현했다. 현재 제어 전송은 Heartbeat 응답을 사용한다.
-- [ ] 세션별 프로세스·작업 공간을 분리하고 동일 브랜치가 필요한 경우 독립 clone 경로를 검증한다.
+- [x] 세션별 실행을 분리하고 같은 브랜치의 독립 clone 두 개로 dirty 파일·미추적 파일·Git 사용자/서명 설정 보존을 로컬 Git 시험에서 확인했다. 사내 gh clone은 미검증이다.
 - [ ] 네트워크 단절·Dispatcher 재시작·Provider 종료·Worker 충돌·PC 절전/복귀를 구별한다.
 - [ ] Lease 만료 전 중단·자식 프로세스 정리와 재배정 유예 관계를 실제 Windows/Linux에서 시험한다.
-- [ ] 미전달 완료 보고, 게시 응답 유실, 다른 Worker의 delivery-only 복구를 구현한다.
-- [ ] 이전 Worker 복귀 시 dirty workspace와 늦은 결과를 보존하되 새 실행에 무단 결합하지 않는다.
+- [x] 완료 ACK 유실·게시 응답 유실·다른 계정 Worker의 Delivery만 복구를 통합 Fixture로 확인했다. 완료된 Provider 작업을 반복하지 않는다.
+- [x] dirty workspace 보존과 새 generation 완료 뒤 이전 Worker의 늦은 결과를 rejected-results에 보존하는 시험을 통과했다. 늦은 결과가 Delivery를 덮어쓰지 않는다.
 - [ ] 설정 전송 중단·초기 캐시 없음·설정 revision 경합·Lease 정책 변경 중의 신구 Attempt 동시 존재를 시험한다.
 
 **완료 기준:** 2개 이상의 Worker와 한 Worker 안의 2개 이상의 세션에서 용량·격리·권한 계약이 유지된다. Dispatcher 단절에 Worker가 죽지 않는다. 장애 복구가 완료 작업 재실행과 혼동되지 않는다.
@@ -149,7 +149,7 @@
 
 ## 통합 검증 시나리오
 
-아래 표는 전체 제품 수용 시험이다. 현재 `tests/`의 90개 시험과 `scripts/smoke.mjs`는 설정·모델 선택·상태 전이·HTTP·기본 폴링·Provider 프로세스·Worker 실행/제어/게시·빌드 산출물 기동의 계약을 검증한다. 이 통과를 사내 GitHub·실제 구독 런타임·Windows 실제 사용자 환경·무인 업데이트의 종단간 시험 통과로 취급하지 않는다.
+아래 표는 전체 제품 수용 시험이다. 현재 `tests/`의 103개 시험과 `scripts/smoke.mjs`는 설정·모델 선택·상태 전이·HTTP·기본 폴링·Provider 프로세스·Worker 실행/제어/게시·빌드 산출물 기동의 계약을 검증한다. 이 통과를 사내 GitHub·실제 구독 런타임·Windows 실제 사용자 환경·무인 업데이트의 종단간 시험 통과로 취급하지 않는다.
 
 | ID | 시나리오 | 기대 결과 | 요구·단계 |
 |---|---|---|---|
@@ -214,7 +214,7 @@
 **구현된 경로의 실제 환경 검증과 아직 시험하지 않은 장애 조합을 진행한다.** PR 리뷰 본문·활성화 구간 보정·시스템 라벨 동기화·실행 직전 권한/원본 확인, Launcher·업데이트·자동 시작 어댑터는 구현되어 있다. 이를 재구현하지 말고 다음 항목부터 확인한다.
 
 1. GHES 테스트 저장소와 Worker의 기존 계정으로 요청·후속 대화·Write 권한 변경·댓글 편집/삭제·실제 게시를 시험한다. Codex/Claude 구독 모델의 카탈로그·실제 Turn·Auto Review·stop·steer·질문 종료와 중앙/저장소 지침 적용을 확인한다. 현재 Provider 결과는 프로세스 Fixture이며 실제 모델 Turn 검증은 아니다.
-2. 두 Worker·두 세션의 경쟁 배정, Lease 만료·절전 복귀·stale 결과, 다른 Worker의 Delivery만 복구, dirty workspace 보존과 설정 경합의 미검증 조합을 시험한다.
+2. 로컬 통합 시험의 두 Worker 경쟁·세션별 stop·계정 간 Delivery 복구·stale 결과와 실제 Git clone의 dirty 상태 보존을 기준으로, 실제 PC의 절전/복귀·자식 트리 종료·원격 Git 상태와 설정 경합의 남은 조합을 시험한다.
 3. 사내 registry·정확한 package/scope를 확정해 실제 릴리스 감지·설치·drain·전환·rollback을 시험한다. Windows/Linux 로그인 자동 시작·로그아웃·자식 프로세스 트리 종료·기존 사용자 환경 유지도 실제 OS에서 확인한다.
 
 검증에 필요한 외부 값은 현재 상태에 정리했다. 실제 사내 값이나 계정이 없는 시험은 완료 표시하지 않는다. 최근 배포 검증·판단은 [Launcher 기록](history/2026-11-02-launcher-updates.md), Provider·입력·게시 계약은 [런타임 기록](history/2026-11-02-runtime-contracts.md)에서 이어 읽는다.

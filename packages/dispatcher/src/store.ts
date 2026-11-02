@@ -12,7 +12,7 @@ import { resolveLabels, selectWorker } from '../../shared/src/models.ts';
 import { splitOutput } from '../../shared/src/output.ts';
 import type { RunConfig } from '../../shared/src/protocol.ts';
 
-type Session = { id: string; host: string; repository: string; kind: 'issue' | 'pull'; number: number; active: number; activation_at: number; labels: string; previous_worker: string | null };
+type Session = { id: string; host: string; repository: string; kind: 'issue' | 'pull'; number: number; active: number; activation_at: number; labels: string; previous_worker: string | null; blocked_reason:string|null };
 type Input = { id: string; session_id: string; source_kind:string;source_id:string; body: string; author: string; created_at: number; status: string };
 type Turn = { id: string; input_id: string; session_id: string; status: string; run_config: string | null; generation: number };
 export type Attempt = { id: string; turn_id: string; session_id: string; worker_id: string; generation: number; status: string; started_at: number; ended_at: number | null; lease_until: number; lease_duration: number; interrupt_grace: number; reassign_grace: number; result_hash: string | null };

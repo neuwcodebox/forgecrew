@@ -10,13 +10,14 @@ import type { DeliveryClaim, WorkClaim, WorkSession } from '../../shared/src/pro
 export type GitHubComment={id:number;body:string;user:{id:number;login:string}};
 export class GhClient {
   readonly hostname:string;
-  constructor(hostname:string) {this.hostname=hostname;}
+  private readonly execute:typeof command;
+  constructor(hostname:string,execute:typeof command=command) {this.hostname=hostname;this.execute=execute;}
   async api<T>(endpoint:string,method='GET',payload?:unknown):Promise<T> {
-    const result=await command('gh',['api','--hostname',this.hostname,endpoint,'--method',method,...(payload===undefined?[]:['--input','-'])],{...(payload===undefined?{}:{input:JSON.stringify(payload)}),timeout:30000,maxBytes:20*1024*1024});
+    const result=await this.execute('gh',['api','--hostname',this.hostname,endpoint,'--method',method,...(payload===undefined?[]:['--input','-'])],{...(payload===undefined?{}:{input:JSON.stringify(payload)}),timeout:30000,maxBytes:20*1024*1024});
     if(result.code!==0)throw new Error('github_request_failed');return JSON.parse(result.stdout) as T;
   }
   async pages<T>(endpoint:string):Promise<T[]> {
-    const result=await command('gh',['api','--hostname',this.hostname,endpoint,'--paginate','--slurp'],{timeout:60000,maxBytes:20*1024*1024});
+    const result=await this.execute('gh',['api','--hostname',this.hostname,endpoint,'--paginate','--slurp'],{timeout:60000,maxBytes:20*1024*1024});
     if(result.code!==0)throw new Error('github_pagination_failed');return (JSON.parse(result.stdout) as T[][]).flat();
   }
   account() {return this.api<{id:number;login:string}>('user');}
@@ -54,15 +55,15 @@ export class GhClient {
     const destination=join(root,session.id);
     if(await stat(destination).then(()=>true,()=>false)) {
       const actual=await realpath(destination);if(!actual.startsWith((await realpath(root))+sep))throw new Error('workspace_outside_managed_root');
-      const result=await command('git',['rev-parse','--show-toplevel'],{cwd:destination});
+      const result=await this.execute('git',['rev-parse','--show-toplevel'],{cwd:destination});
       if(result.code!==0||resolve(result.stdout.trim())!==actual)throw new Error('workspace_requires_repair');return destination;
     }
     const staging=join(root,'.clone-'+session.id+'-'+randomUUID());
     // A failed partial clone is preserved for diagnosis; an existing checkout is never reset.
-    const clone=await command('gh',['repo','clone',`https://${this.hostname}/${session.repository}.git`,staging],{timeout:120000});
+    const clone=await this.execute('gh',['repo','clone',`https://${this.hostname}/${session.repository}.git`,staging],{timeout:120000});
     if(clone.code!==0)throw new Error('workspace_clone_failed');
     if(session.kind==='pull') {
-      const checkout=await command('gh',['pr','checkout',String(session.number),'--repo',`https://${this.hostname}/${session.repository}`],{cwd:staging,timeout:60000});
+      const checkout=await this.execute('gh',['pr','checkout',String(session.number),'--repo',`https://${this.hostname}/${session.repository}`],{cwd:staging,timeout:60000});
       if(checkout.code!==0)throw new Error('pull_checkout_failed');
     }
     await rename(staging,destination);return destination;

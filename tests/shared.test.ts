@@ -56,6 +56,10 @@ describe('model labels and scheduling',() => {
     const latest=worker();const old=worker();old.models[0]!.version=[6,9];old.models[0]!.id='gpt-6.9-sol';
     expect(() => selectWorker([{worker:latest,active:1,seenAt:1000000},{worker:old,active:0,seenAt:1000000}],'team/project-a','sol','high',1000000,config())).toThrow('latest_model_workers_busy');
   });
+  it.each(['rate_limited','auth_required','unavailable'] as const)('waits for an unavailable newest model (%s) without using an older version',availability=>{
+    const latest=worker(),old=worker();latest.models[0]!.availability=availability;old.models[0]!.version=[6,9];old.models[0]!.id='gpt-6.9-sol';
+    expect(()=>selectWorker([{worker:latest,active:0,seenAt:1000000},{worker:old,active:0,seenAt:1000000}],'team/project-a','sol','high',1000000,config())).toThrow('latest_model_unavailable');
+  });
   it('never downgrades a model to satisfy effort',() => {
     const w=worker(); w.models[0]!.efforts=['low'];
     expect(() => selectWorker([{worker:w,active:0,seenAt:1000000}],'team/project-a','sol','xhigh',1000000,config())).toThrow('unsupported_effort_or_auto_review');

@@ -21,15 +21,15 @@ const cleanup:(()=>Promise<void>)[]=[];afterEach(async()=>{for(const dispose of 
 function deferred<T>() {let resolve!:(v:T)=>void;let reject!:(e:Error)=>void;const promise=new Promise<T>((r,j)=>{resolve=r;reject=j;});return {promise,resolve,reject};}
 class FakeGithub extends GhClient {
   posted:{id:number;body:string;user:{id:number;login:string}}[]=[];
-  attempts=0;losePostResponse=false;
+  attempts=0;losePostResponse=false;accountId=123;accountLogin='coworker';
   readonly dir:string;
   constructor(host:string,dir:string){super(host);this.dir=dir;}
-  override async account(){return {id:123,login:'coworker'};}
+  override async account(){return {id:this.accountId,login:this.accountLogin};}
   override async repositories(names:string[]){return names;}
   override async context(_claim:WorkClaim){return 'conversation from GitHub';}
   override async workspace(){return this.dir;}
   override async findDelivery(d:DeliveryClaim){return this.posted.find(p=>hash(p.body)===d.body_hash&&d.authors.includes(String(p.user.id)));}
-  override async post(d:DeliveryClaim){this.attempts++;const comment={id:this.attempts,body:d.body,user:{id:123,login:'coworker'}};this.posted.push(comment);if(this.losePostResponse){this.losePostResponse=false;throw new Error('post_response_lost');}return {id:comment.id,html_url:'https://github.example/internal/comment'};}
+  override async post(d:DeliveryClaim){this.attempts++;const comment={id:this.attempts,body:d.body,user:{id:this.accountId,login:this.accountLogin}};this.posted.push(comment);if(this.losePostResponse){this.losePostResponse=false;throw new Error('post_response_lost');}return {id:comment.id,html_url:'https://github.example/internal/comment'};}
 }
 class FakeProvider implements Provider {
   requests:RunRequest[]=[];
@@ -56,7 +56,13 @@ async function setup(options:{loseCompletion?:boolean;engine?:'codex'|'claude'}=
   const key={host:local.hostname,repository:'team/project-a',kind:'issue' as const,number:1};
   const id=s.upsertSession(key,options.engine==='claude'?['ai:enabled','ai:model:opus']:['ai:enabled'],true,Date.now(),'request','writer');
   await runtime.initialize('r'.repeat(48));
-  return {s,configs,dir,local,runtime,provider,github,id,key,tick:(ms:number)=>{offset+=ms;}};
+  const peer=async()=>{
+    const peerLocal={...local,id:randomUUID(),token:'p'.repeat(48)},peerDir=join(dir,'peer'),peerGithub=new FakeGithub(local.hostname,peerDir),peerProvider=new FakeProvider();
+    peerGithub.accountId=456;peerGithub.accountLogin='peer';peerGithub.posted=github.posted;
+    const peerRuntime=new WorkerRuntime(peerLocal,peerDir,{client:new DispatcherClient(peerLocal,fetcher),github:peerGithub,providers:{codex:peerProvider}});
+    cleanup.push(()=>peerRuntime.settleControls());await peerRuntime.initialize('r'.repeat(48));return {runtime:peerRuntime,provider:peerProvider,github:peerGithub,local:peerLocal};
+  };
+  return {s,configs,dir,local,runtime,provider,github,id,key,peer,tick:(ms:number)=>{offset+=ms;}};
 }
 describe('Dispatcher and Worker integration',()=>{
   it('claims, executes, journals and publishes, then resumes with the next central instructions',async()=>{
@@ -121,6 +127,66 @@ describe('Dispatcher and Worker integration',()=>{
     await f.runtime.work();await started.promise;const claim=f.provider.requests[0]!.claim;await f.runtime.drain(0);
     expect(f.runtime.active.size).toBe(0);expect(f.s.sqlite.prepare('SELECT status FROM turns WHERE id=?').get(claim.turnId)).toEqual({status:'recovering'});
     expect(f.github.posted).toHaveLength(0);
+  });
+
+  it('recovers posting on another account without replaying completed Provider work',async()=>{
+    const f=await setup({loseCompletion:true});await f.runtime.work();await Promise.all([...f.runtime.active.values()].map(a=>a.task));
+    // The accepted completion survives even if its ACK and original process are lost.
+    const peer=await f.peer();await peer.runtime.work();
+    expect(peer.provider.requests).toHaveLength(0);expect(peer.github.attempts).toBe(1);expect(peer.github.posted[0]!.user.id).toBe(456);
+    await f.runtime.flushResults();expect(await readdir(join(f.dir,'journal'))).toEqual([]);expect(f.provider.requests).toHaveLength(1);
+  });
+  it('reconciles an uncertain previous account post before another Worker publishes',async()=>{
+    const f=await setup();await f.runtime.work();await Promise.all([...f.runtime.active.values()].map(a=>a.task));f.github.losePostResponse=true;
+    await expect(f.runtime.work()).rejects.toThrow('post_response_lost');f.tick(f.configs.current.runtime.leaseDuration+1);
+    const peer=await f.peer();await peer.runtime.work();expect(peer.github.attempts).toBe(0);expect(peer.provider.requests).toHaveLength(0);expect(f.github.posted).toHaveLength(1);
+    expect(f.s.sqlite.prepare('SELECT status FROM deliveries').get()).toEqual({status:'posted'});
+  });
+  it('keeps a rate-limited request recoverable and prevents new execution until the engine recovers',async()=>{
+    const f=await setup();f.provider.factory=()=>({result:Promise.reject(new Error('codex_rate_limited')),interrupt:async()=>{},steer:async()=>{},close:async()=>{}});
+    await f.runtime.work();await Promise.all([...f.runtime.active.values()].map(a=>a.task));await f.runtime.work();
+    expect(f.provider.requests).toHaveLength(1);expect(f.github.posted).toHaveLength(0);expect(f.s.sqlite.prepare('SELECT status FROM turns').get()).toEqual({status:'recovering'});
+    expect(f.s.getSession(f.id)?.blocked_reason).toBe('latest_model_unavailable');
+    f.provider.factory=()=>({result:Promise.resolve({kind:'completed',text:'recovered'}),interrupt:async()=>{},steer:async()=>{},close:async()=>{}});
+    await f.runtime.refreshCapabilities();await f.runtime.heartbeat();await f.runtime.work();await Promise.all([...f.runtime.active.values()].map(a=>a.task));
+    expect(f.provider.requests[1]!.claim.turnId).toBe(f.provider.requests[0]!.claim.turnId);
+  });
+  it('preserves the last known engine catalogue when a refresh loses authentication',async()=>{
+    const f=await setup();f.provider.probe=async()=>{throw new Error('codex_auth_required');};await f.runtime.refreshCapabilities();await f.runtime.heartbeat();
+    const stored=f.s.sqlite.prepare('SELECT capabilities FROM workers WHERE id=?').get(f.local.id) as {capabilities:string};
+    expect(JSON.parse(stored.capabilities).models[0]).toMatchObject({id:'gpt-6.10-sol',availability:'auth_required'});expect(f.s.claim(f.local.id,f.configs.current)).toBeNull();
+  });
+
+  it('issues one owner under competing Claims and isolates stop across two concurrent sessions',async()=>{
+    const f=await setup(),peer=await f.peer(),first=deferred<Result>(),second=deferred<Result>(),firstStarted=deferred<void>(),secondStarted=deferred<void>();
+    f.provider.factory=()=>{firstStarted.resolve();return {result:first.promise,interrupt:async()=>{first.reject(new Error('provider_interrupted'));},steer:async()=>{},close:async()=>{}};};
+    peer.provider.factory=()=>{secondStarted.resolve();return {result:second.promise,interrupt:async()=>{second.reject(new Error('provider_interrupted'));},steer:async()=>{},close:async()=>{}};};
+    try{
+      await Promise.all([f.runtime.work(),peer.runtime.work()]);
+      expect(f.runtime.active.size+peer.runtime.active.size).toBe(1);
+      f.s.upsertSession({...f.key,number:2},['ai:enabled'],true,Date.now(),'independent session','writer');
+      await Promise.all([f.runtime.work(),peer.runtime.work()]);
+      expect(f.runtime.active.size).toBe(1);expect(peer.runtime.active.size).toBe(1);
+      await Promise.all([firstStarted.promise,secondStarted.promise]);
+      const claim=f.provider.requests[0]!.claim;
+      f.s.addControl(claim.session.id,'stop_first_worker',{kind:'stop'},Date.now());await f.runtime.heartbeat();await f.runtime.settleControls();
+      expect(f.runtime.active.size).toBe(0);expect(peer.runtime.active.size).toBe(1);
+      expect(f.s.sqlite.prepare("SELECT COUNT(*) AS n FROM attempts WHERE status='running'").get()).toEqual({n:1});
+    }finally{
+      first.resolve({kind:'completed',text:'first'});second.resolve({kind:'completed',text:'second'});
+      await Promise.all([...f.runtime.active.values(),...peer.runtime.active.values()].map(a=>a.task));
+    }
+  });
+  it('preserves a late old Worker result without overwriting the recovered generation',async()=>{
+    const f=await setup(),pending=deferred<Result>();
+    f.provider.factory=()=>({result:pending.promise,interrupt:async()=>{},steer:async()=>{},close:async()=>{}});
+    await f.runtime.work();const old=[...f.runtime.active.values()][0]!;
+    f.tick(f.configs.current.runtime.leaseDuration+f.configs.current.runtime.reassignGrace+1);
+    const peer=await f.peer();await peer.runtime.work();await Promise.all([...peer.runtime.active.values()].map(a=>a.task));
+    pending.resolve({kind:'completed',text:'late stale answer'});await old.task;
+    expect(peer.provider.requests[0]!.claim.turnId).toBe(old.claim.turnId);expect(peer.provider.requests[0]!.claim.generation).toBe(2);
+    expect(await readdir(join(f.dir,'rejected-results'))).toContain(old.claim.attemptId+'.json');
+    const delivery=f.s.sqlite.prepare('SELECT body FROM deliveries').get() as {body:string};expect(delivery.body).not.toContain('late stale answer');
   });
 
 });

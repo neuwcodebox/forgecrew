@@ -68,7 +68,7 @@ export class CodexProvider implements Provider {
         if(turnId&&p.turn?.id!==turnId)return;
         if(interruptedForQuestion)finish({kind:'needs_reply',text:question});
         else if(cancelled||p.turn?.status==='interrupted')fail(new Error('provider_interrupted'));
-        else if(p.turn?.status!=='completed')fail(new Error('codex_turn_failed'));
+        else if(p.turn?.status!=='completed'){const error=p.turn?.error?.codexErrorInfo;fail(new Error(['usageLimitExceeded','rateLimitExceeded'].includes(error)?'codex_rate_limited':error==='unauthorized'?'codex_auth_required':'codex_turn_failed'));}
         else if(!output.trim())fail(new Error('codex_empty_result'));
         else finish({kind:'completed',text:output});
       }

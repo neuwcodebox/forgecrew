@@ -40,6 +40,10 @@ describe('Codex official process protocol',()=>{
     try{const result=await run.result;expect(result.kind).toBe('needs_reply');expect(result.text).toContain('Which database?');}finally{await run.close();}
     expect((await f.requests()).some(m=>m.id===101&&'result' in m)).toBe(false);
   });
+  it('reports native usage limits distinctly from an unsuccessful answer',async()=>{
+    const f=await fixture('codex-rate-limit'),run=new CodexProvider(f.executable).run(f.request);
+    try{await expect(run.result).rejects.toThrow('codex_rate_limited');}finally{await run.close();}
+  });
   it('steers only the expected active turn',async()=>{
     const f=await fixture('codex-steer');const run=new CodexProvider(f.executable).run(f.request);
     try{await run.steer('change approach','control_1');expect((await run.result).kind).toBe('completed');}finally{await run.close();}
@@ -55,6 +59,10 @@ describe('Claude official stream-json process protocol',()=>{
     const f=await fixture('claude');let session='';f.request.onSession=async s=>{session=s.id;};
     const run=new ClaudeProvider(f.executable).run(f.request);try{expect((await run.result).text).toBe('fixture answer');}finally{await run.close();}
     expect(session).toBe('claude_session_1');const sent=await f.requests();expect(sent.findIndex(m=>m.request?.subtype==='get_settings')).toBeLessThan(sent.findIndex(m=>m.type==='user'));
+  });
+  it('reports native authentication errors without treating them as an AI answer',async()=>{
+    const f=await fixture('claude-auth-error'),run=new ClaudeProvider(f.executable).run(f.request);
+    try{await expect(run.result).rejects.toThrow('claude_auth_required');}finally{await run.close();}
   });
   it('rejects a silent model fallback before sending the request',async()=>{
     const f=await fixture('claude-mismatch');const run=new ClaudeProvider(f.executable).run(f.request);

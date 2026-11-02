@@ -15,7 +15,7 @@ import { validateRunConfig } from '../../shared/src/protocol.ts';
 import { validateProjection } from '../../shared/src/config.ts';
 import type { Projection } from '../../shared/src/config.ts';
 
-type Active={claim:WorkClaim;clock:LeaseClock;controller:AbortController;run?:ProviderRun;task:Promise<void>;reason?:'stop'|'shutdown'|'lease_lost'|'steer'|'refresh';};
+type Active={claim:WorkClaim;clock:LeaseClock;controller:AbortController;run?:ProviderRun;task:Promise<void>;reason?:'stop'|'shutdown'|'lease_lost'|'steer'|'refresh'|'provider_blocked';};
 type Heartbeat={configRevision:string;controls:{id:string;attemptId:string;control:Control}[]};
 type Dependencies={client?:DispatcherClient;github?:GhClient;providers?:Partial<Record<Engine,Provider>>};
 const code=(error:unknown)=>error instanceof Error&&/^[a-z_]+$/.test(error.message)?error.message:'worker_operation_failed';
@@ -71,7 +71,11 @@ export class WorkerRuntime {
     const models:Model[]=[];
     for(const [engine,provider] of Object.entries(this.providers)) {
       try {models.push(...await provider.probe());}
-      catch(error){this.log('provider_blocked',engine+':'+code(error));}
+      catch(error){
+        const reason=code(error),availability=/auth|subscription|login/.test(reason)?'auth_required':/rate_limit|usage_limit/.test(reason)?'rate_limited':'unavailable';
+        models.push(...this.capabilities.models.filter(m=>m.engine===engine).map(m=>({...m,availability} as Model)));
+        this.log('provider_blocked',engine+':'+reason);
+      }
     }
     this.capabilities.models=models;this.catalogAt=Date.now();
   }
@@ -146,6 +150,12 @@ export class WorkerRuntime {
     }catch(error) {
       if(!active.reason) {
         if(['input_changed_before_start','input_deleted','requester_no_longer_has_write_access'].includes(code(error)))active.reason='refresh';
+        else if(/rate_limit|usage_limit|auth_required|subscription_login_required|runtime_exited|exited_before_result|rpc_timeout/.test(code(error))){
+          active.reason='provider_blocked';
+          const availability=/rate_limit|usage_limit/.test(code(error))?'rate_limited':/auth|subscription/.test(code(error))?'auth_required':'unavailable';
+          if(this.capabilities)this.capabilities.models=this.capabilities.models.map(m=>m.engine===claim.runConfig.engine?{...m,availability}:m);
+          this.catalogAt=Date.now();this.log('provider_blocked',claim.runConfig.engine+':'+code(error));
+        }
         else result={kind:'failed',text:'Worker 실행 실패: '+code(error),origin:'runtime'};
       }
     }finally {
@@ -154,8 +164,9 @@ export class WorkerRuntime {
     const identity={attemptId:claim.attemptId,generation:claim.generation};
     if(active.reason==='steer')return;
     if(active.reason==='stop') {await this.client.request('/v1/cancel',identity);return;}
-    if(active.reason==='shutdown'||active.reason==='lease_lost'||active.reason==='refresh') {
-      await this.client.request('/v1/release',identity).catch(()=>{});return;
+    if(active.reason==='shutdown'||active.reason==='lease_lost'||active.reason==='refresh'||active.reason==='provider_blocked') {
+      await this.client.request('/v1/release',identity).catch(()=>{});
+      if(active.reason==='provider_blocked')await this.heartbeat().catch(()=>{});return;
     }
     if(result) {
       await writeResult(this.directory,claim.attemptId,{generation:claim.generation,result});

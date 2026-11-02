@@ -9,7 +9,7 @@ let model=parameter('--model')||'claude-opus-5-5',turnId='turn_1';
 const codex=scenario.startsWith('codex');
 function codexEnd(status='completed') {
   if(status==='completed')send({method:'item/completed',params:{threadId:'thread_1',turnId,item:{type:'agentMessage',phase:'final_answer',text:'fixture answer'}}});
-  send({method:'turn/completed',params:{threadId:'thread_1',turn:{id:turnId,status}}});
+  send({method:'turn/completed',params:{threadId:'thread_1',turn:{id:turnId,status,...(scenario.includes('rate-limit')?{error:{codexErrorInfo:'usageLimitExceeded',message:'limited'}}:{})}}});
 }
 const lines=createInterface({input:process.stdin});
 lines.on('line',line=>{
@@ -27,7 +27,7 @@ lines.on('line',line=>{
       case 'turn/start':
         send({method:'turn/started',params:{threadId:'thread_1',turn:{id:turnId}}});response({turn:{id:turnId}});
         if(scenario.includes('question'))send({id:101,method:'item/tool/requestUserInput',params:{threadId:'thread_1',questions:[{question:'Which database?'}]}});
-        else if(!scenario.includes('steer'))codexEnd();break;
+        else if(scenario.includes('rate-limit'))codexEnd('failed');else if(!scenario.includes('steer'))codexEnd();break;
       case 'turn/steer':response({});codexEnd();break;
       case 'turn/interrupt':codexEnd('interrupted');response({});break;
     }
@@ -43,6 +43,7 @@ lines.on('line',line=>{
       }
     } else if(message.type==='user') {
       send({type:'system',subtype:'init',session_id:'claude_session_1',model,permissionMode:'auto'});
+      if(scenario.includes('auth-error')){send({type:'assistant',error:'authentication_failed',message:{content:[]}});send({type:'result',is_error:true,result:'authentication failed'});return;}
       send({type:'result',is_error:false,result:'fixture answer',modelUsage:{[model]:{}}});
     }
   }

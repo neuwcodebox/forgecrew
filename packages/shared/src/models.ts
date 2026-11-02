@@ -25,14 +25,16 @@ export function resolveLabels(labels: string[], config: Config, repository: stri
 }
 export type Candidate = { worker: WorkerCapabilities; active: number; seenAt: number };
 export function selectWorker(candidates: Candidate[], repository: string, family: Family, effort: Effort | null, now: number, config: Config, previousWorker?: string): { worker: WorkerCapabilities; model: Model; effort: Effort | null } {
-  const ready = candidates.flatMap(c => {
+  const catalogue = candidates.flatMap(c => {
     if (!c.worker.schemaVersions.includes(1) || c.seenAt + config.runtime.leaseDuration <= now || !c.worker.repositories.some(r => r.toLowerCase() === repository.toLowerCase())) return [];
-    return c.worker.models.filter(m => m.family === family && m.availability === 'ready' && m.observedAt <= now && m.observedAt + config.runtime.modelCatalogMaxAge > now).map(model => ({ ...c, model }));
+    return c.worker.models.filter(m => m.family === family && m.observedAt <= now && m.observedAt + config.runtime.modelCatalogMaxAge > now).map(model => ({ ...c, model }));
   });
-  if (!ready.length) throw new ContractError('no_compatible_worker');
-  const latest = ready.reduce((a, b) => compareVersions(a.model.version, b.model.version) >= 0 ? a : b).model;
-  const matching = ready.filter(c => compareVersions(c.model.version, latest.version) === 0);
-  const supported = matching.filter(c => c.model.autoReview && (effort === null || c.model.efforts.includes(effort)));
+  if (!catalogue.length) throw new ContractError('no_compatible_worker');
+  const latest = catalogue.reduce((a, b) => compareVersions(a.model.version, b.model.version) >= 0 ? a : b).model;
+  const matching = catalogue.filter(c => compareVersions(c.model.version, latest.version) === 0);
+  const usable=matching.filter(c=>c.model.availability==='ready');
+  if(!usable.length)throw new ContractError('latest_model_unavailable');
+  const supported = usable.filter(c => c.model.autoReview && (effort === null || c.model.efforts.includes(effort)));
   if (!supported.length) throw new ContractError('unsupported_effort_or_auto_review');
   const available = supported.filter(c => !c.worker.draining && c.active < c.worker.maxConcurrentSessions);
   if (!available.length) throw new ContractError('latest_model_workers_busy');
