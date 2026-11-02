@@ -4,7 +4,7 @@
 
 - 단계: **P1–P5 구현 진행 중. Worker 실행·게시·Launcher 전환 경로의 로컬 통합 검증 완료**.
 - shared·dispatcher·worker 패키지에 중앙 YAML·SQLite·HTTP·활성화 구간·PR 리뷰·전체 재동기화 폴링과 두 Provider 어댑터를 구현했다. Worker의 setup/run/doctor, 독립 Heartbeat·Lease 감시, 격리 clone, 세션 재개, 완료 저널·게시 재조정, stop·steer를 연결했다. 실행 직전 중앙 권한·원본 댓글 검증과 시스템 라벨 동기화도 구현했다.
-- `npm run check`: TypeScript 검사, Vitest 119개 테스트, tsdown 기반 세 패키지 JS 빌드, 빌드된 CLI·Dispatcher 프로세스 기동·SQLite·HTTP 인증·설정 재로드 smoke 검사를 통과했다. 로컬 검증 환경은 Linux / Node.js 24.22.1이다. Provider 프로세스와 GitHub 통합 Fixture를 실제 구독 실행과 구별한다. 사내 계정·실제 구독 모델 Turn·Windows 실제 사용자 환경·실제 사내 npm 업데이트·로그인 자동 시작 시험은 수행하지 않았다. Launcher 자식 프로세스 전환·롤백·중복 기동·종료, drain·패키지 격리 설치와 loopback npm 레지스트리의 실제 tarball 다운로드·자동 전환·불량 버전 rollback·ID/저널/작업 파일 보존을 로컬 시험으로 확인했다.
+- `npm run check`: TypeScript 검사, Vitest 122개 테스트, tsdown 기반 세 패키지 JS 빌드, 빌드된 CLI·Dispatcher 프로세스 기동·SQLite·HTTP 인증·설정 재로드 smoke 검사를 통과했다. 로컬 검증 환경은 Linux / Node.js 24.22.1이다. Provider 프로세스와 GitHub 통합 Fixture를 실제 구독 실행과 구별한다. 사내 계정·실제 구독 모델 Turn·Windows 실제 사용자 환경·실제 사내 npm 업데이트·로그인 자동 시작 시험은 수행하지 않았다. Launcher 자식 프로세스 전환·롤백·중복 기동·종료, drain·패키지 격리 설치와 loopback npm 레지스트리의 실제 tarball 다운로드·자동 전환·불량 버전 rollback·ID/저널/작업 파일 보존을 로컬 시험으로 확인했다.
 - Linux/Windows GitHub Actions 검사와 Dispatcher Dockerfile을 추가했다. 코드 `4ddc3c8`의 [CI 41451169932](https://github.com/neuwcodebox/forgecrew/actions/runs/41451169932)에서 Linux/Windows의 90개 테스트·빌드·배포 패키지 smoke와 Docker 검사가 모두 통과했다. Docker 검사는 비루트/읽기 전용 실행·원자적 YAML 교체·SQLite 재시작·정지 볼륨 백업/복원을 포함한다.
 - 제품 정책과 배포 구조는 [SPEC](SPEC.md), 구체적인 동작 계약은 [TECH](TECH.md)를 기준으로 한다.
 - 외부 환경에서 제공할 값은 GHES 호스트·테스트 저장소·PAT, Dispatcher 주소, 사내 npm 레지스트리·scope다. Worker는 기존 `gh` 및 Codex/Claude 구독 로그인을 사용한다.
@@ -56,7 +56,7 @@
 
 **완료 기준:** 독립 Issue/PR 세션에서 라벨과 일반 댓글만으로 실제 대화가 이어진다. 폴링 반복으로 같은 작업이 다시 실행되지 않는다. 질문을 남긴 Turn은 슬롯을 반환한다. 제어 명령은 정확한 Attempt에만 적용된다.
 
-**근거:** 아직 없음.
+**근거:** [런타임 계약 기록](history/2026-11-02-runtime-contracts.md), [분산 복구 기록](history/2026-11-02-recovery.md)의 Provider/폴링/HTTP 통합 시험. 실제 사내 종단간 수용 근거는 아직 없다.
 
 ## P3. 분산 배정·다중 세션·장애 복구
 
@@ -80,7 +80,7 @@
 
 **완료 기준:** 2개 이상의 Worker와 한 Worker 안의 2개 이상의 세션에서 용량·격리·권한 계약이 유지된다. Dispatcher 단절에 Worker가 죽지 않는다. 장애 복구가 완료 작업 재실행과 혼동되지 않는다.
 
-**근거:** 아직 없음.
+**근거:** [분산 복구 기록](history/2026-11-02-recovery.md)의 두 Worker·계정 간 게시·stale 결과·실제 로컬 Git 시험. 실제 PC 절전/복귀와 회사 계정 시험은 남아 있다.
 
 ## P4. 두 엔진의 기능 일관성과 모델 설정 완성
 
@@ -102,7 +102,7 @@
 
 **완료 기준:** 두 엔진 각각에서 요청·후속 대화·모델/effort·질문·stop·steer·Auto Review가 실제로 시험된다. 필수 동작은 구현 또는 명시된 동등 대체를 충족해야 한다. “미지원이라고 표시함”만으로 완료하지 않는다.
 
-**근거:** 아직 없음.
+**근거:** `tests/providers.test.ts`, `tests/shared.test.ts`, `tests/runtime.test.ts`와 [분산 복구 기록](history/2026-11-02-recovery.md). 구독 실행·자동 검토의 실제 수용 근거는 아직 없다.
 
 ## P5. 사내 npm 설치·무인 업데이트·Docker 배포
 
@@ -118,11 +118,11 @@
 - [x] setup·start·stop·status·doctor와 중복 기동 방지를 구현하고 프로세스 Fixture·배포 패키지 smoke로 확인했다. Linux 사용자 서비스·Windows 로그온 작업의 등록/해제 어댑터를 추가했다. 실제 로그인 자동 시작은 미검증이다.
 - [x] 버전별 staging 설치·npm lock 무결성·Node/프로토콜·상태 schema 확인과 drain·한도 중단 후 Turn 복구를 구현했다. npm 설치 계약 Fixture와 실제 tarball 격리 설치를 구분해 검증했다.
 - [x] Launcher 전환 포인터·이전 포인터 복구·READY·안정화·lastKnownGood·롤백·cooldown을 자식 프로세스 시험으로 확인했다.
-- [ ] npm/Dispatcher 불통, 설치 실패, 새 버전 실행 오류, 포인터 교체 중 충돌, 상태 schema 변경을 구별한다.
+- [x] npm/Dispatcher 불통·설치 실패·무결성/상태 계약 불일치·새 버전 실행 오류·전환 도중 충돌을 구별하고 현재 정상 포인터·staging 정리·rollback을 계약/프로세스/실제 npm 시험으로 확인했다. 사내 연결 장애·전원 종료 수용 시험은 남아 있다.
 - [x] 실제 npm tarball의 자동 전환·불량 버전 rollback 후 Worker ID·설정 캐시·인증 설정·작업 파일·미전달 결과가 유지되는 loopback 시험을 통과했다. 다른 state schema는 설치 전에 거절하며 사내 배포·실제 OS 로그인 시험은 남아 있다.
-- [ ] 중앙 YAML의 마운트 파일 교체·잘못된 수정·재시작 필요 항목·Secret 비노출을 시험하고 설정 적용 상태를 진단할 수 있게 한다.
+- [x] 원자적 YAML 교체·잘못된 후보 유지·재시작 필요 항목 거절·Secret 비노출과 인증된 revision/세션 진단을 단위·HTTP·Docker 시험으로 확인했다.
 - [x] Docker 설정 디렉터리·데이터 볼륨·health·종료·SQLite 백업/복원 명령을 README에 작성하고 격리된 Linux CI에서 이미지 실행·재시작·볼륨 복원을 검증했다.
-- [ ] 실제 패키지명·레지스트리·지원 Node/런타임 버전과 일치하는 설치 안내를 README에 작성한다.
+- [x] 실제 기본 패키지명 `@forgecrew/worker`·Node 24·최초 설치·정확한 버전 게시·registry/scope 설정 안내를 README에 작성했다. 사내 주소·인증·게시 권한의 확정은 첫 배포 시험에 남아 있다.
 
 **완료 기준:** Windows/Linux에서 실행 중 새 버전을 게시하면 사용자 개입 없이 교체·재시작·재연결된다. 실패해도 실행 가능한 정상 버전과 복구 가능한 상태가 남는다. Dispatcher 장애 때문에 정상 버전을 잘못 롤백하지 않는다.
 
@@ -149,7 +149,7 @@
 
 ## 통합 검증 시나리오
 
-아래 표는 전체 제품 수용 시험이다. 현재 `tests/`의 119개 시험과 `scripts/smoke.mjs`는 설정·모델 선택·상태 전이·HTTP·기본 폴링·Provider 프로세스·Worker 실행/제어/게시·빌드 산출물 기동의 계약을 검증한다. 이 통과를 사내 GitHub·실제 구독 런타임·Windows 실제 사용자 환경·무인 업데이트의 종단간 시험 통과로 취급하지 않는다.
+아래 표는 전체 제품 수용 시험이다. 현재 `tests/`의 122개 시험과 `scripts/smoke.mjs`는 설정·모델 선택·상태 전이·HTTP·기본 폴링·Provider 프로세스·Worker 실행/제어/게시·빌드 산출물 기동의 계약을 검증한다. 이 통과를 사내 GitHub·실제 구독 런타임·Windows 실제 사용자 환경·무인 업데이트의 종단간 시험 통과로 취급하지 않는다.
 
 | ID | 시나리오 | 기대 결과 | 요구·단계 |
 |---|---|---|---|

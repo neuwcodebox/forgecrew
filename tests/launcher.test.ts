@@ -1,5 +1,5 @@
 import { afterEach,describe,expect,it } from 'vitest';
-import { mkdtemp,mkdir,writeFile,readFile,rm,copyFile } from 'node:fs/promises';
+import { mkdtemp,mkdir,writeFile,readFile,rm,copyFile,readdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join,resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -76,6 +76,20 @@ describe('stable Launcher and production staging',{timeout:20000},()=>{
     });
     expect(staged?.version).toBe('0.2.0');expect(calls[1]).toContain(c.package+'@0.2.0');expect(calls[1]).toContain('--ignore-scripts');expect(calls[1]).toContain('--engine-strict');
     expect(await readFile(join(dir,'versions',staged!.id,'installed.json'),'utf8')).toContain(integrity);
+  });
+  it.each(['integrity','contract','install'] as const)('preserves the working pointer and removes incomplete staging after %s failure',async failure=>{
+    const dir=await directory(),c=config().updates,integrity='sha512-'+Buffer.alloc(64,2).toString('base64'),tarball=new URL('candidate.tgz',c.registry).href;
+    await atomicWrite(join(dir,'current.json'),{formatVersion:1,active:'old',lastKnownGood:'old',pending:null,phase:'idle',failed:{}});
+    const before=await readFile(join(dir,'current.json'),'utf8');
+    await expect(stageUpdate(dir,c,current,async(_exe,args)=>{
+      if(args[0]==='view')return {code:0,stdout:JSON.stringify({version:'0.2.0',dist:{integrity,tarball}}),stderr:''};
+      const root=args[args.indexOf('--prefix')+1]!,pkg=join(root,'node_modules',c.package);await mkdir(join(pkg,'dist'),{recursive:true});await writeFile(join(pkg,'dist','cli.js'),'export {};');
+      if(failure==='install')return {code:1,stdout:'',stderr:'fixture install failed'};
+      await atomicWrite(join(root,'package-lock.json'),{packages:{['node_modules/'+c.package]:{integrity:failure==='integrity'?'different':integrity,resolved:tarball}}});
+      await atomicWrite(join(pkg,'package.json'),{name:c.package,version:'0.2.0',bin:{forgecrew:'dist/cli.js'},forgecrew:{launcherProtocol:1,stateSchema:2}});
+      return {code:0,stdout:'',stderr:''};
+    })).rejects.toThrow(failure==='integrity'?'update_integrity_mismatch':failure==='contract'?'incompatible_worker_contract':'update_install_failed');
+    expect(await readFile(join(dir,'current.json'),'utf8')).toBe(before);expect(await readdir(join(dir,'staging'))).toEqual([]);expect(await readdir(join(dir,'versions')).catch(()=>[])).toEqual([]);
   });
   it('keeps the current install when metadata points to an unapproved registry host',async()=>{
     const dir=await directory();let installs=0;

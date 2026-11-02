@@ -34,3 +34,5 @@ Windows Launcher 전환 시험에서 native 프로세스 식별 검사 때문에
 `scripts/update-smoke.mjs`는 loopback npm packument·tarball 서버를 띄우고 실제 `npm view`·`npm install`로 정확한 새 버전을 설치한다. 원래 Worker의 오프라인 설정 캐시에서 자동 업데이트를 시작하고 정상 후보의 READY·관찰·승격, 기동 실패 후보의 lastKnownGood 복귀·cooldown까지 연결했다. 그 전후 Worker ID·로컬 토큰 설정·미전달 결과 저널·작업 파일을 비교했다. gh는 로컬 실패 Fixture이므로 외부 로그인·모델 Turn을 호출하지 않는다.
 
 scope별 `.npmrc` registry가 중앙 출처를 덮어쓰지 못하도록 npm 명령에 전역 registry와 해당 scope registry를 함께 고정한다. 시험에서는 사용자 scope 설정을 실패하는 다른 loopback 주소로 둬 이 우선순위를 검증한다. 사내 registry 게시·인증과 사용자 로그인 자동 시작의 실제 검증을 대체하지 않는다.
+
+설치 실패·lock 무결성 불일치·지원하지 않는 상태 계약을 각각 주입해 정상 active/lastKnownGood 포인터가 바뀌지 않고 staging이 정리되는 시험도 통과했다. 실제 npm/프로세스 전환 시험과 이 실패 주입 시험의 범위를 구분한다.
