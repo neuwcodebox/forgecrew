@@ -130,6 +130,7 @@ export async function runLauncher(directory) {
   await mkdir(directory, { recursive: true, mode: 0o700 });
   const release = await lock(join(directory, 'launcher.lock'));
   let child,
+    pendingReady,
     stopping = false,
     ready = false,
     healthAt = 0,
@@ -140,9 +141,13 @@ export async function runLauncher(directory) {
     transition = false,
     serial = Promise.resolve();
   const queue = (task) => {
-    serial = serial.then(task).catch(async () => {
+    serial = serial.then(task).catch(async (error) => {
       await write(join(directory, 'launcher-error.json'), {
         event: 'launcher_operation_failed',
+        reason:
+          typeof error?.code === 'string' && /^[A-Z_]+$/.test(error.code)
+            ? error.code
+            : 'state_operation_failed',
         at: Date.now(),
       }).catch(() => {});
     });
@@ -246,6 +251,23 @@ export async function runLauncher(directory) {
     await clearChildren();
     if (child === current) child = undefined;
   };
+  const persistReady = async () => {
+    const notice = pendingReady;
+    if (!notice) return;
+    if (notice.child !== child) {
+      pendingReady = undefined;
+      return;
+    }
+    if (notice.candidate) {
+      pointer.phase = 'observing';
+      await savePointer();
+    }
+    await log(notice.candidate ? 'observing' : 'running', { version: notice.version });
+    ready = true;
+    healthAt = Date.now();
+    observedAt = Date.now();
+    pendingReady = undefined;
+  };
   const startChild = async () => {
     const candidate = pointer.pending && pointer.phase === 'switching';
     const selected = candidate ? pointer.pending.id : pointer.active;
@@ -260,6 +282,7 @@ export async function runLauncher(directory) {
       throw error;
     }
     ready = false;
+    pendingReady = undefined;
     healthAt = Date.now();
     observedAt = 0;
     const p = fork(version.entry, ['run', '--config', launch.configPath], {
@@ -301,15 +324,9 @@ export async function runLauncher(directory) {
           descendants.delete(message.pid);
           await saveChildren();
         }
-        if (message.type === 'READY') {
-          ready = true;
-          healthAt = Date.now();
-          observedAt = Date.now();
-          if (candidate) {
-            pointer.phase = 'observing';
-            await savePointer();
-          }
-          await log(candidate ? 'observing' : 'running', { version: version.version });
+        if (message.type === 'READY' && !ready) {
+          pendingReady = { child: p, candidate, version: version.version };
+          await persistReady();
         }
         if (message.type === 'HEALTH') healthAt = Date.now();
         if (
@@ -391,6 +408,7 @@ export async function runLauncher(directory) {
     await log('starting');
     while (!stopping && (await desired())) {
       await serial;
+      if (pendingReady) queue(persistReady);
       if (!child && Date.now() >= restartAt) await startChild();
       if (child) {
         if (

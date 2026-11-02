@@ -113,6 +113,39 @@ describe('stable Launcher and production staging', { timeout: 20000 }, () => {
       (e) => e.filter((v) => v.event === 'started').length === 2,
     );
   });
+  it('retries local READY persistence after a filesystem failure without restarting a healthy Worker', async () => {
+    const dir = await setup();
+    const gate = join(dir, 'fixture-delay-ready');
+    await writeFile(gate, 'hold READY');
+    await startLauncher(dir);
+    await wait(
+      () => events(dir),
+      (items) => items.some((item) => item.event === 'started'),
+    );
+    const before = await launcherStatus(dir);
+    const status = join(dir, 'status.json');
+    await rm(status);
+    await mkdir(status);
+    await rm(gate);
+    try {
+      await wait(
+        () =>
+          readFile(join(dir, 'launcher-error.json'), 'utf8').then(
+            (text) => JSON.parse(text) as { event?: string },
+            () => ({}) as { event?: string },
+          ),
+        (error) => error.event === 'launcher_operation_failed',
+      );
+    } finally {
+      await rm(status, { recursive: true, force: true });
+    }
+    const recovered = await wait(
+      () => launcherStatus(dir),
+      (state) => state.event === 'running',
+    );
+    expect(recovered.pid).toBe(before.pid);
+    expect((await events(dir)).filter((item) => item.event === 'started')).toHaveLength(1);
+  });
   it('switches only from a staged version and promotes after local READY and observation', async () => {
     const dir = await setup();
     await startLauncher(dir);

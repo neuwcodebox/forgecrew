@@ -25,5 +25,13 @@ setInterval(() => {
     }
   } catch {}
 }, 20);
-send({ type: 'READY' });
+const readyGate = path.join(dir, 'fixture-delay-ready');
+if (fs.existsSync(readyGate)) {
+  const timer = setInterval(() => {
+    if (!fs.existsSync(readyGate)) {
+      clearInterval(timer);
+      send({ type: 'READY' });
+    }
+  }, 20);
+} else send({ type: 'READY' });
 if (id.startsWith('bad')) process.exit(42);
