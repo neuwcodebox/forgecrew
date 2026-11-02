@@ -1,0 +1,23 @@
+# Machine-local files and runtime state
+.local/
+.DS_Store
+Thumbs.db
+Desktop.ini
+.env
+.env.*
+!.env.example
+!.env.*.example
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+*.db
+*.log
+
+# Build and test outputs
+node_modules/
+dist/
+build/
+coverage/
+*.tsbuildinfo
+
+# Keep lockfiles and non-secret shared configuration tracked.
