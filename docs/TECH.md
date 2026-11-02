@@ -39,6 +39,27 @@ Dispatcher       Worker PC 여러 대
 
 관련 요구: F4–F6, F11, N1, N2, N5.
 
+### 소스 모듈과 의존 방향
+
+코드는 아래 책임 단위로 묶는다. Worker의 `application.ts`가 HTTP·GitHub·작업 공간·Provider 구현을 조립하며, 실행 정책은 필요한 기능만 가진 인터페이스를 받는다. 테스트도 같은 계약을 구현하는 대역을 사용한다. 외부 통신 경로와 상태 형식이 바뀌지 않는 리팩토링에 별도 호환 계층을 추가하지 않는다.
+
+| 경로 | 책임 |
+|---|---|
+| `shared/src/config/` | YAML 스키마·파싱, 비밀 없는 Worker projection, 검증된 설정의 재로드 |
+| `dispatcher/src/http/` | HTTP 인증·요청 스키마·응답과 취소 가능한 long polling |
+| `dispatcher/src/github/` | Octokit 어댑터와 세션·댓글·리뷰 수집·시스템 라벨 조정 |
+| `dispatcher/src/storage/` | 연결·migration, 설정·Worker·Session·실행·Delivery 저장, 진단·수집 checkpoint |
+| `worker/src/cli/` | 명령 분기, setup 설정 구성, 프로세스 실행·종료, 상태 출력 |
+| `worker/src/dispatcher/` | Worker가 사용하는 명시적 Dispatcher 작업 계약과 HTTP 어댑터 |
+| `worker/src/github/` | GitHub 조회·게시 계약, `gh` 어댑터, 세션별 Git 작업 공간 |
+| `worker/src/runtime/` | 설정 동기화, Worker 능력 보고, Attempt 실행, stop·steer, 결과 재전송, Delivery 게시와 실행 조정 |
+| `worker/src/providers/` | 공통 Provider 계약과 엔진별 모델 카탈로그·프로토콜·실행 어댑터 |
+| `worker/src/state/`, `worker/src/launcher/` | 로컬 세션 재개 상태와 버전 설치·업데이트·Launcher 제어 |
+
+Dispatcher의 `Store`는 연결 수명과 저장 컴포넌트 조립을 맡는다. 실행 완료와 Delivery 생성은 같은 SQLite 연결·트랜잭션 안에서 처리해 원자성을 유지한다. Worker의 `WorkerRuntime`은 독립 루프와 종료 순서를 조정하고, Attempt·제어·완료 저널·게시의 상태는 각 컴포넌트가 소유한다. 프로덕션 어댑터 선택·버전·로그·READY IPC·안정화 환경은 조립 지점에서 주입한다.
+
+설정 해시·HTTP 경로·저널·세션·DB schema·Launcher IPC 계약은 모듈 배치와 독립적이다. 독립 배포되는 `launcher.mjs`는 설치된 Worker 모듈 없이도 실행할 수 있는 단일 부트스트랩으로 유지한다. 관련 요구: F4, F5, F7, F10–F12, N3–N6.
+
 ## 2. 상태 소유권과 인증
 
 | 대상 | 기준 상태·자격 증명 | 책임 |

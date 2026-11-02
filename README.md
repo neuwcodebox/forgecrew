@@ -16,6 +16,8 @@ npm run check
 cp config.example.yaml config.yaml
 ```
 
+`npm run check`는 포맷·미사용 코드·타입 검사, 테스트, 세 패키지 빌드와 배포 smoke 검사를 실행합니다. 코드를 수정한 뒤 `npm run format`으로 포맷을 맞출 수 있습니다. 책임별 모듈과 의존 방향은 [기술 설계](docs/TECH.md#소스-모듈과-의존-방향)에 정리했습니다.
+
 `config.yaml`의 GitHub 호스트·API 주소·허용 저장소와 `server.dataDir`를 실제 환경에 맞게 수정합니다. 로컬 개발의 데이터 경로는 `.local/dispatcher`처럼 쓰기 가능한 경로를 사용하세요. PAT와 32자 이상의 Worker 등록용 비밀값을 각각 `FORGECREW_GITHUB_PAT`, `FORGECREW_REGISTRATION_TOKEN` 환경변수로 설정한 뒤 시작합니다.
 
 ```bash
