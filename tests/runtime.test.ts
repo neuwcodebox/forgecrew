@@ -52,6 +52,7 @@ async function setup(options:{loseCompletion?:boolean;engine?:'codex'|'claude'}=
   if(options.engine==='claude')provider.probe=async()=>[{...worker(Date.now()).models[0]!,engine:'claude',family:'opus',id:'claude-opus-5-5',version:[5,5]}];
   const github=new FakeGithub(local.hostname,dir);
   const runtime=new WorkerRuntime(local,dir,{client:new DispatcherClient(local,fetcher),github,providers:{[options.engine??'codex']:provider}});
+  cleanup.push(()=>runtime.settleControls());
   const key={host:local.hostname,repository:'team/project-a',kind:'issue' as const,number:1};
   const id=s.upsertSession(key,options.engine==='claude'?['ai:enabled','ai:model:opus']:['ai:enabled'],true,Date.now(),'request','writer');
   await runtime.initialize('r'.repeat(48));
@@ -81,7 +82,7 @@ describe('Dispatcher and Worker integration',()=>{
     const old=f.provider.run.bind(f.provider);f.provider.run=r=>{const result=old(r);started.resolve();return result;};
     await f.runtime.work();await started.promise;const a=[...f.runtime.active.values()][0]!;
     f.s.enqueue(f.id,'comment','next','follow-up','writer',Date.now()+1);f.s.addControl(f.id,'stop_comment',{kind:'stop'},Date.now());
-    await f.runtime.heartbeat();await a.task;
+    await f.runtime.heartbeat();await a.task;await f.runtime.settleControls();
     expect(f.s.sqlite.prepare('SELECT status FROM turns WHERE id=?').get(a.claim.turnId)).toEqual({status:'cancelled'});
     expect(f.s.sqlite.prepare("SELECT status FROM inputs WHERE source_id='next'").get()).toEqual({status:'queued'});
   });
@@ -94,6 +95,7 @@ describe('Dispatcher and Worker integration',()=>{
     await f.runtime.work();await first.promise;const previous=f.provider.requests[0]!.claim;
     f.s.addControl(f.id,'steer_comment',{kind:'steer',text:'use SSO'},Date.now());await f.runtime.heartbeat();await second.promise;
     await Promise.all([...f.runtime.active.values()].map(a=>a.task));
+    await f.runtime.settleControls();
     const next=f.provider.requests[1]!.claim;expect(next.turnId).toBe(previous.turnId);expect(next.generation).toBe(previous.generation+1);expect(next.steering?.[0]?.text).toBe('use SSO');
     expect(f.s.sqlite.prepare('SELECT COUNT(*) AS n FROM turns').get()).toEqual({n:1});
   });

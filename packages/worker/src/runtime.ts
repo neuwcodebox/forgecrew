@@ -191,6 +191,7 @@ export class WorkerRuntime {
     }
   }
   checkLeases() {for(const active of this.active.values())if(!active.clock.canRun())void this.interrupt(active,'lease_lost').catch(e=>this.log('interrupt_failed',code(e)));}
+  async settleControls() {await Promise.all([...this.controlTasks.values()]);}
   async run(signal:AbortSignal,registrationToken?:string) {
     await mkdir(this.directory,{recursive:true,mode:0o700});
     process.send?.({type:'READY',protocolVersion:1});
@@ -208,6 +209,7 @@ export class WorkerRuntime {
       loop(async()=>{if(this.projection&&Date.now()-this.catalogAt>=this.projection.payload.runtime.modelCatalogRefreshInterval)await this.refreshCapabilities();},()=>this.projection?.payload.runtime.configCheckInterval??30000),
     ]);
     this.draining=true;
+    await this.settleControls();
     await Promise.all([...this.active.values()].map(a=>this.interrupt(a,'shutdown')));
     await this.flushResults().catch(()=>{});
   }
