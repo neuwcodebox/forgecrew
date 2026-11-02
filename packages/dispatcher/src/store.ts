@@ -10,13 +10,14 @@ import { ContractError } from '../../shared/src/types.ts';
 import type { Control, Result, SessionKey, WorkerCapabilities } from '../../shared/src/types.ts';
 import { resolveLabels, selectWorker } from '../../shared/src/models.ts';
 import { splitOutput } from '../../shared/src/output.ts';
+import type { RunConfig } from '../../shared/src/protocol.ts';
 
 type Session = { id: string; host: string; repository: string; kind: 'issue' | 'pull'; number: number; active: number; activation_at: number; labels: string; previous_worker: string | null };
-type Input = { id: string; session_id: string; body: string; author: string; created_at: number; status: string };
+type Input = { id: string; session_id: string; source_kind:string;source_id:string; body: string; author: string; created_at: number; status: string };
 type Turn = { id: string; input_id: string; session_id: string; status: string; run_config: string | null; generation: number };
 export type Attempt = { id: string; turn_id: string; session_id: string; worker_id: string; generation: number; status: string; started_at: number; ended_at: number | null; lease_until: number; lease_duration: number; interrupt_grace: number; reassign_grace: number; result_hash: string | null };
 export type Delivery = { id: string; session_id: string; turn_id: string; body: string; body_hash: string; expected_author: string | null; status: string; worker_id: string | null; claim_until: number | null; github_id: string | null };
-export type RunConfig = ReturnType<typeof workerProjection> & { sessionConfigRevision: string; model: string; engine: 'codex' | 'claude'; effort: string | null; family: string; runConfigRevision: string };
+export type { RunConfig } from '../../shared/src/protocol.ts';
 
 const migration = `
 CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY);
@@ -29,6 +30,7 @@ CREATE TABLE IF NOT EXISTS attempts (id TEXT PRIMARY KEY, turn_id TEXT NOT NULL 
 CREATE UNIQUE INDEX IF NOT EXISTS one_active_attempt ON attempts(session_id) WHERE status IN ('running','stopping');
 CREATE INDEX IF NOT EXISTS attempt_worker ON attempts(worker_id,status);
 CREATE TABLE IF NOT EXISTS controls (id TEXT PRIMARY KEY, session_id TEXT NOT NULL, attempt_id TEXT, payload TEXT NOT NULL, status TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS steer_restarts (control_id TEXT PRIMARY KEY REFERENCES controls(id), attempt_id TEXT NOT NULL REFERENCES attempts(id));
 CREATE TABLE IF NOT EXISTS deliveries (id TEXT PRIMARY KEY, session_id TEXT NOT NULL, turn_id TEXT NOT NULL, body TEXT NOT NULL, body_hash TEXT NOT NULL, expected_author TEXT, status TEXT NOT NULL, worker_id TEXT, claim_until INTEGER, github_id TEXT);
 CREATE TABLE IF NOT EXISTS automatic_sources (session_id TEXT NOT NULL, github_id TEXT NOT NULL, PRIMARY KEY(session_id,github_id));
 CREATE TABLE IF NOT EXISTS delivery_authors (delivery_id TEXT NOT NULL REFERENCES deliveries(id), author_id TEXT NOT NULL, PRIMARY KEY(delivery_id,author_id));
@@ -105,7 +107,10 @@ export class Store {
     });
   }
   ackControl(worker: string, id: string) {
-    this.sqlite.prepare("UPDATE controls SET status='applied' WHERE id=? AND attempt_id IN (SELECT id FROM attempts WHERE worker_id=? AND status IN ('running','stopping'))").run(id, worker);
+    this.sqlite.prepare("UPDATE controls SET status='applied' WHERE id=? AND attempt_id IN (SELECT id FROM attempts WHERE worker_id=?)").run(id, worker);
+  }
+  private steering(turnId:string):{id:string;text:string}[] {
+    return this.sqlite.prepare("SELECT c.id,json_extract(c.payload,'$.text') AS text FROM controls c JOIN attempts a ON a.id=c.attempt_id WHERE a.turn_id=? AND c.status='applied' AND json_extract(c.payload,'$.kind')='steer' ORDER BY c.rowid").all(turnId) as {id:string;text:string}[];
   }
   private candidates() {
     return this.sqlite.prepare(`SELECT w.*, (SELECT COUNT(*) FROM attempts a WHERE a.worker_id=w.id AND a.status IN ('running','stopping')) AS active FROM workers w`).all().map(row => {
@@ -135,7 +140,7 @@ export class Store {
           const id = randomUUID(); const now = this.now();
           this.sqlite.prepare("INSERT INTO attempts VALUES (?,?,?,?,?,'running',?,NULL,?,?,?,?,NULL)").run(id,turnId,session.id,workerId,generation,now,now+config.runtime.leaseDuration,config.runtime.leaseDuration,config.runtime.interruptGrace,config.runtime.reassignGrace);
           this.sqlite.prepare('UPDATE sessions SET previous_worker=?,blocked_reason=NULL WHERE id=?').run(workerId,session.id);
-          return { attemptId: id, turnId, session, input, generation, leaseDuration: config.runtime.leaseDuration, interruptGrace: config.runtime.interruptGrace, runConfig };
+          return { attemptId: id, turnId, session, input, generation, leaseDuration: config.runtime.leaseDuration, interruptGrace: config.runtime.interruptGrace, runConfig,steering:this.steering(turnId) };
         } catch (error) {
           if (!(error instanceof ContractError)) throw error;
           this.sqlite.prepare('UPDATE sessions SET blocked_reason=? WHERE id=?').run(error.code,session.id);
@@ -156,6 +161,39 @@ export class Store {
     this.sqlite.prepare('UPDATE attempts SET lease_until=? WHERE id=?').run(deadline,id);
     return { leaseDuration: a.lease_duration, interruptGrace: a.interrupt_grace };
   }
+  release(id:string,worker:string,generation:number) {
+    this.sqlite.transaction(()=>{
+      const a=this.owned(id,worker,generation);if(a.status==='terminal')return;
+      this.sqlite.prepare("UPDATE attempts SET status='terminal',ended_at=? WHERE id=?").run(this.now(),id);
+      this.sqlite.prepare("UPDATE turns SET status='recovering' WHERE id=?").run(a.turn_id);
+    }).immediate();
+  }
+  restartSteer(id:string,worker:string,generation:number,controlId:string) {
+    return this.sqlite.transaction(()=>{
+      const previous=this.owned(id,worker,generation);
+      const mapped=this.sqlite.prepare('SELECT attempt_id FROM steer_restarts WHERE control_id=?').get(controlId) as {attempt_id:string}|undefined;
+      let a:Attempt;
+      if(mapped) {
+        a=this.sqlite.prepare('SELECT * FROM attempts WHERE id=?').get(mapped.attempt_id) as Attempt;
+        if(a.worker_id!==worker||a.turn_id!==previous.turn_id)throw new ContractError('invalid_control_target');
+      } else {
+        if(previous.status==='terminal'||previous.lease_until<=this.now())throw new ContractError('lease_expired');
+        const control=this.sqlite.prepare("SELECT 1 FROM controls WHERE id=? AND attempt_id=? AND status='pending' AND json_extract(payload,'$.kind')='steer'").get(controlId,id);
+        if(!control)throw new ContractError('invalid_control_target');
+        this.sqlite.prepare("UPDATE attempts SET status='terminal',ended_at=? WHERE id=?").run(this.now(),id);
+        const nextId=randomUUID(),now=this.now();
+        this.sqlite.prepare("INSERT INTO attempts VALUES (?,?,?,?,?,'running',?,NULL,?,?,?,?,NULL)").run(nextId,previous.turn_id,previous.session_id,worker,generation+1,now,now+previous.lease_duration,previous.lease_duration,previous.interrupt_grace,previous.reassign_grace);
+        this.sqlite.prepare('UPDATE turns SET generation=? WHERE id=?').run(generation+1,previous.turn_id);
+        this.sqlite.prepare("UPDATE controls SET status='applied' WHERE id=?").run(controlId);
+        this.sqlite.prepare('INSERT INTO steer_restarts VALUES (?,?)').run(controlId,nextId);
+        a=this.sqlite.prepare('SELECT * FROM attempts WHERE id=?').get(nextId) as Attempt;
+      }
+      if(a.status==='terminal'||a.lease_until<=this.now())throw new ContractError('lease_expired');
+      const turn=this.sqlite.prepare('SELECT * FROM turns WHERE id=?').get(a.turn_id) as Turn;
+      const input=this.sqlite.prepare('SELECT * FROM inputs WHERE id=?').get(turn.input_id) as Input;
+      return {attemptId:a.id,turnId:a.turn_id,session:this.getSession(a.session_id)!,input,generation:a.generation,leaseDuration:Math.min(a.lease_duration,a.lease_until-this.now()),interruptGrace:a.interrupt_grace,runConfig:JSON.parse(turn.run_config!) as RunConfig,steering:this.steering(a.turn_id)};
+    }).immediate();
+  }
   cancel(id: string, worker: string, generation: number) {
     this.sqlite.transaction(() => {
       const a = this.owned(id,worker,generation);
@@ -175,7 +213,7 @@ export class Store {
       if (a.status === 'terminal' || a.lease_until <= this.now()) throw new ContractError('lease_expired');
       const turn = this.sqlite.prepare('SELECT run_config FROM turns WHERE id=?').get(a.turn_id) as { run_config: string };
       const run = JSON.parse(turn.run_config) as RunConfig;
-      const deliveries = splitOutput(result.text,run.payload.output.attribution,randomUUID());
+      const deliveries = splitOutput(result.text,result.origin==='runtime'?run.payload.output.automationAttribution:run.payload.output.attribution,randomUUID());
       this.sqlite.prepare("UPDATE attempts SET status='terminal',ended_at=?,result_hash=? WHERE id=?").run(this.now(),resultHash,id);
       this.sqlite.prepare('UPDATE turns SET status=?,result=? WHERE id=?').run(result.kind,JSON.stringify(result),a.turn_id);
       this.sqlite.prepare("UPDATE inputs SET status='consumed' WHERE id=(SELECT input_id FROM turns WHERE id=?)").run(a.turn_id);

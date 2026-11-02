@@ -45,5 +45,8 @@ export class RpcClient extends EventEmitter {
     });
   }
   notify(method:string,params?:Record<string,unknown>) { this.child.stdin.write(JSON.stringify({method,...(params?{params}:{})})+'\n'); }
+  rejectRequest(id:number|string) {
+    this.child.stdin.write(JSON.stringify({id,error:{code:-32000,message:'No human response is available for this request.'}})+'\n');
+  }
   async close() {this.fail(new Error('rpc_closed'));await terminateTree(this.child);}
 }

@@ -18,7 +18,7 @@ export const capabilitiesSchema = z.strictObject({
   repositories: z.array(z.string().regex(/^[\w.-]+\/[\w.-]+$/)).max(1000), models: z.array(model).max(1000), draining: z.boolean(),
 });
 const identity = z.strictObject({ attemptId: z.string().uuid(), generation: z.number().int().positive() });
-const completed = identity.extend({ result: z.strictObject({ kind: z.enum(['completed','needs_reply','failed']), text: z.string().min(1).max(2000000), links: z.array(z.url()).max(100).optional() }) });
+const completed = identity.extend({ result: z.strictObject({ kind: z.enum(['completed','needs_reply','failed']), text: z.string().min(1).max(2000000), links: z.array(z.url()).max(100).optional(),origin:z.enum(['ai','runtime']).optional() }) });
 
 export function createApp(store: Store, configs: ConfigManager, registrationToken: string) {
   const app = new Hono<{ Variables: { worker: string } }>();
@@ -61,6 +61,13 @@ export function createApp(store: Store, configs: ConfigManager, registrationToke
   });
   app.post('/v1/cancel', async c => {
     const r = identity.parse(await c.req.json()); store.cancel(r.attemptId,c.get('worker'),r.generation); return c.json({ ok: true });
+  });
+  app.post('/v1/release',async c=>{
+    const r=identity.parse(await c.req.json());store.release(r.attemptId,c.get('worker'),r.generation);return c.json({ok:true});
+  });
+  app.post('/v1/steer-restart',async c=>{
+    const r=identity.extend({controlId:z.string().regex(/^[0-9a-f]{64}$/)}).parse(await c.req.json());
+    return c.json({claim:store.restartSteer(r.attemptId,c.get('worker'),r.generation,r.controlId)});
   });
   app.post('/v1/controls/:id/ack', c => { store.ackControl(c.get('worker'),c.req.param('id')); return c.json({ ok: true }); });
   app.post('/v1/deliveries/claim', c => c.json({ delivery: store.claimDelivery(c.get('worker'), configs.current.runtime.leaseDuration) }));

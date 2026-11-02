@@ -28,7 +28,7 @@ export type WorkerCapabilities = {
 };
 export type SessionKey = { host: string; repository: string; kind: 'issue' | 'pull'; number: number };
 export type Control = { kind: 'stop' } | { kind: 'steer'; text: string };
-export type Result = { kind: 'completed' | 'needs_reply' | 'failed'; text: string; links?: string[] | undefined };
+export type Result = { kind: 'completed' | 'needs_reply' | 'failed'; text: string; links?: string[] | undefined;origin?:'ai'|'runtime'|undefined };
 
 export class ContractError extends Error {
   readonly code: string;
