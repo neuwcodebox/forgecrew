@@ -15,7 +15,7 @@ import { validateRunConfig } from '../../shared/src/protocol.ts';
 import { validateProjection } from '../../shared/src/config.ts';
 import type { Projection } from '../../shared/src/config.ts';
 
-type Active={claim:WorkClaim;clock:LeaseClock;controller:AbortController;run?:ProviderRun;task:Promise<void>;reason?:'stop'|'shutdown'|'lease_lost'|'steer'|'refresh'|'provider_blocked';};
+type Active={claim:WorkClaim;clock:LeaseClock;controller:AbortController;run?:ProviderRun;task:Promise<void>;reason?:'stop'|'shutdown'|'lease_lost'|'steer'|'refresh'|'provider_blocked'|'github_blocked';};
 type Heartbeat={configRevision:string;controls:{id:string;attemptId:string;control:Control}[]};
 type Dependencies={client?:DispatcherClient;github?:GhClient;providers?:Partial<Record<Engine,Provider>>};
 const code=(error:unknown)=>error instanceof Error&&/^[a-z_]+$/.test(error.message)?error.message:'worker_operation_failed';
@@ -35,6 +35,7 @@ export class WorkerRuntime {
   private stabilizing=process.env.FORGECREW_STABILIZING==='1';
   private updateCheck:((p:Projection,signal:AbortSignal)=>Promise<void>)|undefined;
   private flushing:Promise<void>|undefined;
+  private delivery:{claim:DeliveryClaim;clock:LeaseClock;controller:AbortController;interruptGrace:number}|undefined;
   constructor(config:LocalConfig,directory:string,dependencies:Dependencies={}) {
     this.config=config;this.directory=directory;this.client=dependencies.client??new DispatcherClient(config);
     this.github=dependencies.github??new GhClient(config.hostname);
@@ -67,6 +68,7 @@ export class WorkerRuntime {
   }
   async refreshCapabilities() {
     if(!this.projection||!this.capabilities)return;
+    const account=await this.github.account();this.capabilities.githubLogin=account.login;this.capabilities.githubId=String(account.id);
     this.capabilities.repositories=await this.github.repositories(this.projection.payload.github.repositories);
     const models:Model[]=[];
     for(const [engine,provider] of Object.entries(this.providers)) {
@@ -91,6 +93,12 @@ export class WorkerRuntime {
         active.clock.renew(wall,mono,{duration:lease.leaseDuration,interruptGrace:lease.interruptGrace});
       }catch(error){if(error instanceof DispatcherError&&error.status===409)void this.interrupt(active,'lease_lost').catch(e=>this.log('interrupt_failed',code(e)));}
     }));
+    const delivery=this.delivery;
+    if(delivery&&!delivery.controller.signal.aborted){
+      const wall=Date.now(),mono=performance.now();
+      try{const lease=await this.client.request<{leaseDuration:number}>('/v1/deliveries/'+delivery.claim.id+'/renew');delivery.clock.renew(wall,mono,{duration:lease.leaseDuration,interruptGrace:delivery.interruptGrace});}
+      catch(error){if(error instanceof DispatcherError&&error.status===409)delivery.controller.abort();}
+    }
     for(const control of response.controls) {
       if(this.controlTasks.has(control.id))continue;
       const task=this.applyControl(control).catch(error=>this.log('control_failed',code(error))).finally(()=>this.controlTasks.delete(control.id));
@@ -139,8 +147,8 @@ export class WorkerRuntime {
     const {claim}=active;let result:Result|undefined;
     await atomicWrite(join(this.directory,'attempts',claim.attemptId+'.json'),{claim,state:'starting'});
     try {
-      const context=await this.github.context(claim);
-      const workspace=await this.github.workspace(this.directory,claim.session);
+      const context=await this.github.context(claim,active.controller.signal);
+      const workspace=await this.github.workspace(this.directory,claim.session,active.controller.signal);
       if(!active.clock.canRun()||active.controller.signal.aborted)throw new Error('lease_expired_before_start');
       const sessionPath=join(this.directory,'sessions',claim.session.id+'-'+claim.runConfig.engine+'.json');
       const previous=await readFile(sessionPath,'utf8').then(s=>JSON.parse(s) as ProviderState,()=>undefined);
@@ -150,6 +158,7 @@ export class WorkerRuntime {
     }catch(error) {
       if(!active.reason) {
         if(['input_changed_before_start','input_deleted','requester_no_longer_has_write_access'].includes(code(error)))active.reason='refresh';
+        else if(['github_request_failed','github_pagination_failed','workspace_clone_failed','pull_checkout_failed'].includes(code(error))){active.reason='github_blocked';if(this.capabilities)this.capabilities.repositories=this.capabilities.repositories.filter(r=>r.toLowerCase()!==claim.session.repository.toLowerCase());this.log('github_blocked',code(error));}
         else if(/rate_limit|usage_limit|auth_required|subscription_login_required|runtime_exited|exited_before_result|rpc_timeout/.test(code(error))){
           active.reason='provider_blocked';
           const availability=/rate_limit|usage_limit/.test(code(error))?'rate_limited':/auth|subscription/.test(code(error))?'auth_required':'unavailable';
@@ -164,9 +173,9 @@ export class WorkerRuntime {
     const identity={attemptId:claim.attemptId,generation:claim.generation};
     if(active.reason==='steer')return;
     if(active.reason==='stop') {await this.client.request('/v1/cancel',identity);return;}
-    if(active.reason==='shutdown'||active.reason==='lease_lost'||active.reason==='refresh'||active.reason==='provider_blocked') {
+    if(active.reason==='shutdown'||active.reason==='lease_lost'||active.reason==='refresh'||active.reason==='provider_blocked'||active.reason==='github_blocked') {
       await this.client.request('/v1/release',identity).catch(()=>{});
-      if(active.reason==='provider_blocked')await this.heartbeat().catch(()=>{});return;
+      if(active.reason==='provider_blocked'||active.reason==='github_blocked')await this.heartbeat().catch(()=>{});return;
     }
     if(result) {
       await writeResult(this.directory,claim.attemptId,{generation:claim.generation,result});
@@ -192,22 +201,26 @@ export class WorkerRuntime {
       }
     }
   }
-  async work() {
-    if(!this.projection)return;
+  async work(signal?:AbortSignal) {
+    if(!this.projection||this.stabilizing||signal?.aborted)return;
     await this.flushResults();
+    const sentWall=Date.now(),sentMono=performance.now();
     const delivery=await this.client.request<{delivery:DeliveryClaim|null}>('/v1/deliveries/claim');
     if(delivery.delivery) {
-      const d=delivery.delivery;
-      await publishDelivery(this.directory,this.github,d,()=>this.client.request('/v1/deliveries/'+d.id+'/begin'),id=>this.client.request('/v1/deliveries/'+d.id+'/receipt',{githubId:id}));
+      const d=delivery.delivery,controller=new AbortController(),clock=new LeaseClock(),interruptGrace=Math.min(this.projection.payload.runtime.interruptGrace,d.leaseDuration/3);
+      clock.renew(sentWall,sentMono,{duration:d.leaseDuration,interruptGrace});this.delivery={claim:d,clock,controller,interruptGrace};
+      if(!clock.canRun())controller.abort();
+      try{await publishDelivery(this.directory,this.github,d,()=>this.client.request('/v1/deliveries/'+d.id+'/begin'),id=>this.client.request('/v1/deliveries/'+d.id+'/receipt',{githubId:id}),signal?AbortSignal.any([signal,controller.signal]):controller.signal);}
+      finally{this.delivery=undefined;}
     }
-    while(this.active.size<this.config.maxConcurrentSessions&&!this.draining&&!this.stabilizing) {
+    while(this.active.size<this.config.maxConcurrentSessions&&!this.draining&&!this.stabilizing&&!signal?.aborted) {
       const wall=Date.now(),mono=performance.now();const {claim}=await this.client.request<{claim:WorkClaim|null}>('/v1/claim');
       if(!claim)break;
-      if(this.draining||this.stabilizing){await this.client.request('/v1/release',{attemptId:claim.attemptId,generation:claim.generation});break;}
+      if(this.draining||this.stabilizing||signal?.aborted){await this.client.request('/v1/release',{attemptId:claim.attemptId,generation:claim.generation});break;}
       this.start(claim,wall,mono);
     }
   }
-  checkLeases() {for(const active of this.active.values())if(!active.clock.canRun())void this.interrupt(active,'lease_lost').catch(e=>this.log('interrupt_failed',code(e)));}
+  checkLeases() {if(this.delivery&&!this.delivery.clock.canRun())this.delivery.controller.abort();for(const active of this.active.values())if(!active.clock.canRun())void this.interrupt(active,'lease_lost').catch(e=>this.log('interrupt_failed',code(e)));}
   activate(){this.stabilizing=false;}
   setUpdateHandler(handler:(p:Projection,signal:AbortSignal)=>Promise<void>){this.updateCheck=handler;}
   async drain(timeout:number,signal?:AbortSignal) {
@@ -240,7 +253,7 @@ export class WorkerRuntime {
     await Promise.all([
       loop(async()=>{if(this.projection&&!this.stabilizing&&!this.draining)await this.updateCheck?.(this.projection,signal);},()=>this.projection?.payload.updates.checkInterval??60000),
       loop(()=>this.heartbeat(),()=>this.projection?.payload.runtime.heartbeatInterval??15000),
-      loop(()=>this.work(),()=>this.projection?.payload.runtime.reconnect.initialDelay??1000),
+      loop(()=>this.work(signal),()=>this.projection?.payload.runtime.reconnect.initialDelay??1000),
       loop(()=>this.checkLeases(),()=>250),
       loop(async()=>{if(this.projection&&Date.now()-this.catalogAt>=this.projection.payload.runtime.modelCatalogRefreshInterval)await this.refreshCapabilities();},()=>this.projection?.payload.runtime.configCheckInterval??30000),
     ]);

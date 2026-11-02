@@ -294,7 +294,7 @@ Provider 세션 ID는 host·repo·Session·engine·workspace와 함께 매핑한
 
 1. Worker는 terminal 결과·출력 종류·모델·작업 링크·Attempt·적용 설정 revision과 최종 게시 본문을 로컬 저널에 먼저 기록한다.
 2. Dispatcher에 완료를 보고한다. Dispatcher는 generation을 검증하고 Turn 결과와 Delivery를 한 트랜잭션에서 저장한다.
-3. Worker가 Delivery 게시 권한을 Claim한다. 이 권한은 완료된 실행 Lease와 구별한다.
+3. Worker가 Delivery 게시 권한을 Claim한다. 이 권한은 완료된 실행 Lease와 구별하며 Heartbeat에서 독립적으로 갱신한다. 발급 당시 TTL을 유지하고 만료 여유 안에 갱신하지 못하면 진행 중 gh 요청을 취소한다. 새 게시 직전 실제 gh 계정도 발급된 작성 계정 목록과 대조한다.
 4. Worker가 자기 `gh`로 고정된 본문을 게시하고 반환된 댓글 ID·URL을 로컬에 기록한 뒤 Dispatcher에 알린다. AI 본문에는 설정된 AI 작성 표기가, 런타임 알림에는 자동화 표기가 포함된다.
 5. 응답이 불확실하면 같은 Delivery 표식의 기존 댓글을 조회한 후에만 재시도한다.
 

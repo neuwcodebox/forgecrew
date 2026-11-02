@@ -56,6 +56,18 @@ describe('SQLite ownership, FIFO and recovery',() => {
     expect(s.isAutomatic(d.session_id,'789',w.githubId,d.body)).toBe(true);
     s.deliveryReceipt(w.id,d.id,'789');expect(s.claimDelivery(w.id,c.runtime.leaseDuration)).toBeNull();expect(s.isAutomatic(d.session_id,'789',w.githubId,'edited by human')).toBe(true);
   });
+  it('renews an ongoing delivery using its issued lease and rejects expired ownership',()=>{
+    const {s,c,w,tick}=setup();const a=s.claim(w.id,c)!;s.complete(a.attemptId,w.id,a.generation,{kind:'completed',text:'answer'});
+    const d=s.claimDelivery(w.id,c.runtime.leaseDuration)!;s.beginPost(w.id,d.id);tick(c.runtime.leaseDuration/2);
+    expect(s.renewDelivery(w.id,d.id).leaseDuration).toBe(c.runtime.leaseDuration);tick(c.runtime.leaseDuration/2+1);
+    expect(s.claimDelivery(w.id,c.runtime.leaseDuration)).toBeNull();tick(c.runtime.leaseDuration/2);
+    expect(()=>s.renewDelivery(w.id,d.id)).toThrow('delivery_lease_expired');
+  });
+  it('accepts an identical receipt after ACK loss but never overwrites it with another comment',()=>{
+    const {s,c,w,tick}=setup();const a=s.claim(w.id,c)!;s.complete(a.attemptId,w.id,a.generation,{kind:'completed',text:'answer'});
+    const d=s.claimDelivery(w.id,c.runtime.leaseDuration)!;s.beginPost(w.id,d.id);s.deliveryReceipt(w.id,d.id,'1234');tick(c.runtime.leaseDuration+1);
+    expect(()=>s.deliveryReceipt(w.id,d.id,'1234')).not.toThrow();expect(()=>s.deliveryReceipt(w.id,d.id,'5678')).toThrow('receipt_conflict');
+  });
   it('does not trust a marker copied by another account, or different body',() => {
     const {s,c,w}=setup();const a=s.claim(w.id,c)!;s.complete(a.attemptId,w.id,a.generation,{kind:'completed',text:'result'});
     const d=s.claimDelivery(w.id,c.runtime.leaseDuration)!;s.beginPost(w.id,d.id);

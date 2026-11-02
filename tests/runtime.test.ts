@@ -26,10 +26,10 @@ class FakeGithub extends GhClient {
   constructor(host:string,dir:string){super(host);this.dir=dir;}
   override async account(){return {id:this.accountId,login:this.accountLogin};}
   override async repositories(names:string[]){return names;}
-  override async context(_claim:WorkClaim){return 'conversation from GitHub';}
+  override async context(_claim:WorkClaim,_signal?:AbortSignal){return 'conversation from GitHub';}
   override async workspace(){return this.dir;}
   override async findDelivery(d:DeliveryClaim){return this.posted.find(p=>hash(p.body)===d.body_hash&&d.authors.includes(String(p.user.id)));}
-  override async post(d:DeliveryClaim){this.attempts++;const comment={id:this.attempts,body:d.body,user:{id:this.accountId,login:this.accountLogin}};this.posted.push(comment);if(this.losePostResponse){this.losePostResponse=false;throw new Error('post_response_lost');}return {id:comment.id,html_url:'https://github.example/internal/comment'};}
+  override async post(d:DeliveryClaim,_signal?:AbortSignal){this.attempts++;const comment={id:this.attempts,body:d.body,user:{id:this.accountId,login:this.accountLogin}};this.posted.push(comment);if(this.losePostResponse){this.losePostResponse=false;throw new Error('post_response_lost');}return {id:comment.id,html_url:'https://github.example/internal/comment'};}
 }
 class FakeProvider implements Provider {
   requests:RunRequest[]=[];
@@ -38,11 +38,11 @@ class FakeProvider implements Provider {
   async probe(){return worker(Date.now()).models;}
   run(request:RunRequest){this.requests.push(request);return this.factory(request);}
 }
-async function setup(options:{loseCompletion?:boolean;engine?:'codex'|'claude'}={}) {
+async function setup(options:{loseCompletion?:boolean;engine?:'codex'|'claude';secondEngine?:boolean}={}) {
   let offset=0;const s=new Store(':memory:',()=>Date.now()+offset);cleanup.push(async()=>s.close());
   const configs=new ConfigManager(configSource,c=>s.saveConfig(c));const app=createApp(s,configs,'r'.repeat(48));
   const dir=await mkdtemp(join(tmpdir(),'forgecrew-runtime-'));cleanup.push(()=>rm(dir,{recursive:true,force:true}));
-  const local:LocalConfig={schemaVersion:1,id:randomUUID(),token:'t'.repeat(48),dispatcher:'http://localhost',hostname:configs.current.github.hostname,maxConcurrentSessions:1,engines:options.engine==='claude'?{claude:'fixture'}:{codex:'fixture'}};
+  const local:LocalConfig={schemaVersion:1,id:randomUUID(),token:'t'.repeat(48),dispatcher:'http://localhost',hostname:configs.current.github.hostname,maxConcurrentSessions:1,engines:options.engine==='claude'?{claude:'fixture'}:{codex:'fixture',...(options.secondEngine?{claude:'fixture'}:{})}};
   let lose=options.loseCompletion??false;
   const fetcher:typeof fetch=async(input,init)=>{
     const response=await app.request(new Request(input,init));
@@ -50,8 +50,9 @@ async function setup(options:{loseCompletion?:boolean;engine?:'codex'|'claude'}=
   };
   const provider=new FakeProvider();
   if(options.engine==='claude')provider.probe=async()=>[{...worker(Date.now()).models[0]!,engine:'claude',family:'opus',id:'claude-opus-5-5',version:[5,5]}];
+  const secondProvider=new FakeProvider();secondProvider.probe=async()=>[{...worker(Date.now()).models[0]!,engine:'claude',family:'opus',id:'claude-opus-5-5',version:[5,5]}];
   const github=new FakeGithub(local.hostname,dir);
-  const runtime=new WorkerRuntime(local,dir,{client:new DispatcherClient(local,fetcher),github,providers:{[options.engine??'codex']:provider}});
+  const runtime=new WorkerRuntime(local,dir,{client:new DispatcherClient(local,fetcher),github,providers:{[options.engine??'codex']:provider,...(options.secondEngine?{claude:secondProvider}:{})}});
   cleanup.push(()=>runtime.settleControls());
   const key={host:local.hostname,repository:'team/project-a',kind:'issue' as const,number:1};
   const id=s.upsertSession(key,options.engine==='claude'?['ai:enabled','ai:model:opus']:['ai:enabled'],true,Date.now(),'request','writer');
@@ -62,7 +63,7 @@ async function setup(options:{loseCompletion?:boolean;engine?:'codex'|'claude'}=
     const peerRuntime=new WorkerRuntime(peerLocal,peerDir,{client:new DispatcherClient(peerLocal,fetcher),github:peerGithub,providers:{codex:peerProvider}});
     cleanup.push(()=>peerRuntime.settleControls());await peerRuntime.initialize('r'.repeat(48));return {runtime:peerRuntime,provider:peerProvider,github:peerGithub,local:peerLocal};
   };
-  return {s,configs,dir,local,runtime,provider,github,id,key,peer,tick:(ms:number)=>{offset+=ms;}};
+  return {s,configs,dir,local,runtime,provider,secondProvider,github,id,key,peer,tick:(ms:number)=>{offset+=ms;}};
 }
 describe('Dispatcher and Worker integration',()=>{
   it('claims, executes, journals and publishes, then resumes with the next central instructions',async()=>{
@@ -187,6 +188,52 @@ describe('Dispatcher and Worker integration',()=>{
     expect(peer.provider.requests[0]!.claim.turnId).toBe(old.claim.turnId);expect(peer.provider.requests[0]!.claim.generation).toBe(2);
     expect(await readdir(join(f.dir,'rejected-results'))).toContain(old.claim.attemptId+'.json');
     const delivery=f.s.sqlite.prepare('SELECT body FROM deliveries').get() as {body:string};expect(delivery.body).not.toContain('late stale answer');
+  });
+
+  it('renews delivery ownership independently while a GitHub post is in flight',async()=>{
+    const f=await setup();await f.runtime.work();await Promise.all([...f.runtime.active.values()].map(a=>a.task));
+    const started=deferred<void>(),finish=deferred<void>(),post=f.github.post.bind(f.github);
+    f.github.post=async d=>{started.resolve();await finish.promise;return post(d);};
+    const work=f.runtime.work();await started.promise;
+    try{
+      f.tick(f.configs.current.runtime.leaseDuration*0.7);await f.runtime.heartbeat();f.tick(f.configs.current.runtime.leaseDuration*0.4);
+      const peer=await f.peer();await peer.runtime.work();expect(peer.github.attempts).toBe(0);expect(peer.provider.requests).toHaveLength(0);
+    }finally{finish.resolve();await work;}
+    expect(f.github.posted).toHaveLength(1);
+  });
+  it.each(['shutdown','lease_loss'])('cancels an in-flight GitHub command on %s and recovers posting without replaying AI work',async reason=>{
+    const f=await setup();await f.runtime.work();await Promise.all([...f.runtime.active.values()].map(a=>a.task));
+    const started=deferred<void>(),controller=new AbortController();
+    f.github.post=async(_d,signal)=>{started.resolve();return new Promise((_r,reject)=>signal!.addEventListener('abort',()=>reject(new Error('post_aborted')),{once:true}));};
+    const work=f.runtime.work(controller.signal);const failed=expect(work).rejects.toThrow('post_aborted');await started.promise;
+    if(reason==='shutdown')controller.abort();else{f.tick(f.configs.current.runtime.leaseDuration+1);await f.runtime.heartbeat();}await failed;
+    f.tick(f.configs.current.runtime.leaseDuration+1);const peer=await f.peer();await peer.runtime.work();
+    expect(peer.github.posted).toHaveLength(1);expect(peer.provider.requests).toHaveLength(0);expect(f.provider.requests).toHaveLength(1);
+  });
+  it('refuses a new post after the local GitHub account changes until capabilities are refreshed',async()=>{
+    const f=await setup();await f.runtime.work();await Promise.all([...f.runtime.active.values()].map(a=>a.task));f.github.accountId=999;
+    await expect(f.runtime.work()).rejects.toThrow('github_identity_changed');expect(f.github.posted).toHaveLength(0);
+    await f.runtime.refreshCapabilities();await f.runtime.heartbeat();f.tick(f.configs.current.runtime.leaseDuration+1);await f.runtime.work();
+    expect(f.github.posted[0]!.user.id).toBe(999);expect(f.provider.requests).toHaveLength(1);
+  });
+
+  it('continues the other enabled engine after one engine reaches its usage limit',async()=>{
+    const f=await setup({secondEngine:true});f.provider.factory=()=>({result:Promise.reject(new Error('codex_rate_limited')),interrupt:async()=>{},steer:async()=>{},close:async()=>{}});
+    f.s.upsertSession({...f.key,number:2},['ai:enabled','ai:model:opus'],true,Date.now(),'Claude request','writer');
+    await f.runtime.work();await Promise.all([...f.runtime.active.values()].map(a=>a.task));await f.runtime.work();await Promise.all([...f.runtime.active.values()].map(a=>a.task));
+    expect(f.provider.requests).toHaveLength(1);expect(f.secondProvider.requests).toHaveLength(1);expect(f.secondProvider.requests[0]!.claim.runConfig.engine).toBe('claude');
+  });
+
+  it('cancels GitHub preparation at the drain deadline before starting any Provider',async()=>{
+    const f=await setup(),started=deferred<void>();
+    f.github.context=async(_claim,signal)=>{started.resolve();return new Promise((_r,reject)=>signal!.addEventListener('abort',()=>reject(new Error('context_aborted')),{once:true}));};
+    await f.runtime.work();await started.promise;await f.runtime.drain(0);
+    expect(f.provider.requests).toHaveLength(0);expect(f.runtime.active.size).toBe(0);expect(f.s.sqlite.prepare('SELECT status FROM turns').get()).toEqual({status:'recovering'});
+  });
+  it('preserves a request through a GitHub read outage instead of consuming it as an AI failure',async()=>{
+    const f=await setup();f.github.context=async()=>{throw new Error('github_request_failed');};
+    await f.runtime.work();await Promise.all([...f.runtime.active.values()].map(a=>a.task));await f.runtime.work();
+    expect(f.provider.requests).toHaveLength(0);expect(f.github.posted).toHaveLength(0);expect(f.s.sqlite.prepare('SELECT status FROM turns').get()).toEqual({status:'recovering'});
   });
 
 });

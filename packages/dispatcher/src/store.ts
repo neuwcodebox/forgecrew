@@ -16,7 +16,7 @@ type Session = { id: string; host: string; repository: string; kind: 'issue' | '
 type Input = { id: string; session_id: string; source_kind:string;source_id:string; body: string; author: string; created_at: number; status: string };
 type Turn = { id: string; input_id: string; session_id: string; status: string; run_config: string | null; generation: number };
 export type Attempt = { id: string; turn_id: string; session_id: string; worker_id: string; generation: number; status: string; started_at: number; ended_at: number | null; lease_until: number; lease_duration: number; interrupt_grace: number; reassign_grace: number; result_hash: string | null };
-export type Delivery = { id: string; session_id: string; turn_id: string; body: string; body_hash: string; expected_author: string | null; status: string; worker_id: string | null; claim_until: number | null; github_id: string | null };
+export type Delivery = { id: string; session_id: string; turn_id: string; body: string; body_hash: string; expected_author: string | null; status: string; worker_id: string | null; claim_until: number | null; github_id: string | null; lease_duration:number|null };
 export type { RunConfig } from '../../shared/src/protocol.ts';
 export type ActivationWindow={openedAt:number;closedAt:number|null};
 export type Preflight={status:'ready'|'hold'|'cancel';body?:string;reason?:string};
@@ -51,7 +51,11 @@ export class Store {
     this.sqlite.pragma('journal_mode = WAL');
     this.sqlite.pragma('foreign_keys = ON');
     this.sqlite.pragma('busy_timeout = 5000');
-    this.sqlite.transaction(() => this.sqlite.exec(migration)).immediate();
+    this.sqlite.transaction(() => {
+      this.sqlite.exec(migration);
+      if(!(this.sqlite.pragma('table_info(deliveries)') as {name:string}[]).some(c=>c.name==='lease_duration'))this.sqlite.exec('ALTER TABLE deliveries ADD COLUMN lease_duration INTEGER');
+      this.sqlite.prepare('INSERT OR IGNORE INTO schema_migrations VALUES (2)').run();
+    }).immediate();
     this.orm = drizzle(this.sqlite);
   }
   close() { this.sqlite.close(); }
@@ -251,7 +255,7 @@ export class Store {
       this.sqlite.prepare("UPDATE attempts SET status='terminal',ended_at=?,result_hash=? WHERE id=?").run(this.now(),resultHash,id);
       this.sqlite.prepare('UPDATE turns SET status=?,result=? WHERE id=?').run(result.kind,JSON.stringify(result),a.turn_id);
       this.sqlite.prepare("UPDATE inputs SET status='consumed' WHERE id=(SELECT input_id FROM turns WHERE id=?)").run(a.turn_id);
-      for (const d of deliveries) this.sqlite.prepare("INSERT INTO deliveries VALUES (?,?,?,?,?,NULL,'pending',NULL,NULL,NULL)").run(d.id,a.session_id,a.turn_id,d.body,d.bodyHash);
+      for (const d of deliveries) this.sqlite.prepare("INSERT INTO deliveries(id,session_id,turn_id,body,body_hash,expected_author,status,worker_id,claim_until,github_id) VALUES (?,?,?,?,?,NULL,'pending',NULL,NULL,NULL)").run(d.id,a.session_id,a.turn_id,d.body,d.bodyHash);
       return deliveries.map(d => d.id);
     }).immediate();
   }
@@ -273,8 +277,16 @@ export class Store {
       if (!d) return null;
       // expected_author is intentionally retained after an uncertain earlier post.
       const authors = [...new Set([...(this.sqlite.prepare('SELECT author_id FROM delivery_authors WHERE delivery_id=?').all(d.id) as {author_id:string}[]).map(r => r.author_id),capabilities.githubId])];
-      this.sqlite.prepare("UPDATE deliveries SET status='claimed',worker_id=?,claim_until=? WHERE id=?").run(worker,this.now()+ttl,d.id);
+      this.sqlite.prepare("UPDATE deliveries SET status='claimed',worker_id=?,claim_until=?,lease_duration=? WHERE id=?").run(worker,this.now()+ttl,ttl,d.id);
       return { ...d, session: this.getSession(d.session_id)!, authors, leaseDuration: ttl };
+    }).immediate();
+  }
+  renewDelivery(worker:string,id:string) {
+    return this.sqlite.transaction(()=>{
+      const d=this.sqlite.prepare('SELECT * FROM deliveries WHERE id=?').get(id) as Delivery|undefined;
+      if(!d||d.worker_id!==worker||!d.claim_until||d.claim_until<=this.now()||!d.lease_duration||d.status==='posted')throw new ContractError('delivery_lease_expired');
+      this.sqlite.prepare('UPDATE deliveries SET claim_until=? WHERE id=?').run(this.now()+d.lease_duration,id);
+      return {leaseDuration:d.lease_duration};
     }).immediate();
   }
   beginPost(worker: string, id: string): Delivery {
@@ -290,7 +302,9 @@ export class Store {
   }
   deliveryReceipt(worker: string, id: string, githubId: string) {
     const d = this.sqlite.prepare('SELECT * FROM deliveries WHERE id=?').get(id) as Delivery | undefined;
-    if (!d || d.worker_id !== worker || !d.claim_until || d.claim_until <= this.now()) throw new ContractError('delivery_lease_expired');
+    if(!d||d.worker_id!==worker)throw new ContractError('delivery_lease_expired');
+    if(d.status==='posted'){if(d.github_id!==githubId)throw new ContractError('receipt_conflict');return;}
+    if(!d.claim_until||d.claim_until<=this.now())throw new ContractError('delivery_lease_expired');
     this.sqlite.transaction(() => {
       this.sqlite.prepare("UPDATE deliveries SET status='posted',github_id=? WHERE id=?").run(githubId,id);
       this.sqlite.prepare('INSERT OR IGNORE INTO automatic_sources VALUES (?,?)').run(d.session_id,githubId);

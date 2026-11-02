@@ -81,6 +81,7 @@ export function createApp(store: Store, configs: ConfigManager, registrationToke
   });
   app.post('/v1/controls/:id/ack', c => { store.ackControl(c.get('worker'),c.req.param('id')); return c.json({ ok: true }); });
   app.post('/v1/deliveries/claim', c => c.json({ delivery: store.claimDelivery(c.get('worker'), configs.current.runtime.leaseDuration) }));
+  app.post('/v1/deliveries/:id/renew',c=>c.json(store.renewDelivery(c.get('worker'),c.req.param('id'))));
   app.post('/v1/deliveries/:id/begin', c => { store.beginPost(c.get('worker'),c.req.param('id')); return c.json({ ok: true }); });
   app.post('/v1/deliveries/:id/receipt', async c => {
     const r = z.strictObject({ githubId: z.string().regex(/^\d+$/) }).parse(await c.req.json());

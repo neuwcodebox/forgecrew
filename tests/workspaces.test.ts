@@ -28,7 +28,7 @@ describe('managed Git workspaces',{timeout:30000},()=>{
     await writeFile(join(a,'tracked.txt'),'local changes\n');await writeFile(join(a,'untracked.txt'),'keep me');
     await git(['config','user.name','Local coworker'],a);await git(['config','commit.gpgsign','true'],a);
     expect(await gh.workspace(root,session(1))).toBe(a);expect(await readFile(join(a,'tracked.txt'),'utf8')).toBe('local changes\n');expect(await readFile(join(a,'untracked.txt'),'utf8')).toBe('keep me');
-    expect(await readFile(join(b,'tracked.txt'),'utf8')).toBe('original\n');expect(await git(['config','user.name'],a)).toBe('Local coworker');expect(await git(['config','commit.gpgsign'],a)).toBe('true');
+    expect((await readFile(join(b,'tracked.txt'),'utf8')).replace(/\r\n/g,'\n')).toBe('original\n');expect(await git(['config','user.name'],a)).toBe('Local coworker');expect(await git(['config','commit.gpgsign'],a)).toBe('true');
     expect(calls.filter(c=>c[0]==='gh')).toHaveLength(2);expect(calls.some(c=>c.includes('reset')||c.includes('clean'))).toBe(false);
   });
   it('rejects a checkout redirected outside the managed root',async()=>{
