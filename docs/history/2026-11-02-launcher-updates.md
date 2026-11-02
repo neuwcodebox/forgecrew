@@ -28,3 +28,9 @@ STAGE_READY를 포인터에 기록한 뒤 ACK한다. Worker는 새 Claim을 중�
 Windows Launcher 전환 시험에서 native 프로세스 식별 검사 때문에 기본 Vitest 5초 한도를 초과했다. 상태·이벤트 조건 검증은 유지하고 해당 suite의 실패 한도를 20초로 조정했다. 고정 대기 시간으로 성공을 판단하지 않는다.
 
 배포 패키지 smoke의 gh 실패 Fixture는 기존 OS PATH 앞에 추가한다. 시스템 경로를 제거하지 않으며 로컬 READY 관찰 한도를 Launcher의 30초 기동 한도에 맞췄다. 실패 시 상태와 로컬 로그를 남기며 외부 로그인이나 모델 실행을 사용하지 않는다.
+
+## 실제 npm 전환 시험
+
+`scripts/update-smoke.mjs`는 loopback npm packument·tarball 서버를 띄우고 실제 `npm view`·`npm install`로 정확한 새 버전을 설치한다. 원래 Worker의 오프라인 설정 캐시에서 자동 업데이트를 시작하고 정상 후보의 READY·관찰·승격, 기동 실패 후보의 lastKnownGood 복귀·cooldown까지 연결했다. 그 전후 Worker ID·로컬 토큰 설정·미전달 결과 저널·작업 파일을 비교했다. gh는 로컬 실패 Fixture이므로 외부 로그인·모델 Turn을 호출하지 않는다.
+
+scope별 `.npmrc` registry가 중앙 출처를 덮어쓰지 못하도록 npm 명령에 전역 registry와 해당 scope registry를 함께 고정한다. 시험에서는 사용자 scope 설정을 실패하는 다른 loopback 주소로 둬 이 우선순위를 검증한다. 사내 registry 게시·인증과 사용자 로그인 자동 시작의 실제 검증을 대체하지 않는다.

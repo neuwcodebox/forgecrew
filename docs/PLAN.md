@@ -4,7 +4,7 @@
 
 - 단계: **P1–P5 구현 진행 중. Worker 실행·게시·Launcher 전환 경로의 로컬 통합 검증 완료**.
 - shared·dispatcher·worker 패키지에 중앙 YAML·SQLite·HTTP·활성화 구간·PR 리뷰·전체 재동기화 폴링과 두 Provider 어댑터를 구현했다. Worker의 setup/run/doctor, 독립 Heartbeat·Lease 감시, 격리 clone, 세션 재개, 완료 저널·게시 재조정, stop·steer를 연결했다. 실행 직전 중앙 권한·원본 댓글 검증과 시스템 라벨 동기화도 구현했다.
-- `npm run check`: TypeScript 검사, Vitest 112개 테스트, tsdown 기반 세 패키지 JS 빌드, 빌드된 CLI·Dispatcher 프로세스 기동·SQLite·HTTP 인증·설정 재로드 smoke 검사를 통과했다. 로컬 검증 환경은 Linux / Node.js 24.22.1이다. Provider 프로세스와 GitHub 통합 Fixture를 실제 구독 실행과 구별한다. 사내 계정·실제 구독 모델 Turn·Windows 실제 사용자 환경·실제 사내 npm 업데이트·로그인 자동 시작 시험은 수행하지 않았다. Launcher 자식 프로세스 전환·롤백·중복 기동·종료, drain과 패키지 격리 설치는 로컬 시험으로 확인했다.
+- `npm run check`: TypeScript 검사, Vitest 112개 테스트, tsdown 기반 세 패키지 JS 빌드, 빌드된 CLI·Dispatcher 프로세스 기동·SQLite·HTTP 인증·설정 재로드 smoke 검사를 통과했다. 로컬 검증 환경은 Linux / Node.js 24.22.1이다. Provider 프로세스와 GitHub 통합 Fixture를 실제 구독 실행과 구별한다. 사내 계정·실제 구독 모델 Turn·Windows 실제 사용자 환경·실제 사내 npm 업데이트·로그인 자동 시작 시험은 수행하지 않았다. Launcher 자식 프로세스 전환·롤백·중복 기동·종료, drain·패키지 격리 설치와 loopback npm 레지스트리의 실제 tarball 다운로드·자동 전환·불량 버전 rollback·ID/저널/작업 파일 보존을 로컬 시험으로 확인했다.
 - Linux/Windows GitHub Actions 검사와 Dispatcher Dockerfile을 추가했다. 코드 `4ddc3c8`의 [CI 41451169932](https://github.com/neuwcodebox/forgecrew/actions/runs/41451169932)에서 Linux/Windows의 90개 테스트·빌드·배포 패키지 smoke와 Docker 검사가 모두 통과했다. Docker 검사는 비루트/읽기 전용 실행·원자적 YAML 교체·SQLite 재시작·정지 볼륨 백업/복원을 포함한다.
 - 제품 정책과 배포 구조는 [SPEC](SPEC.md), 구체적인 동작 계약은 [TECH](TECH.md)를 기준으로 한다.
 - 외부 환경에서 제공할 값은 GHES 호스트·테스트 저장소·PAT, Dispatcher 주소, 사내 npm 레지스트리·scope다. Worker는 기존 `gh` 및 Codex/Claude 구독 로그인을 사용한다.
@@ -119,7 +119,7 @@
 - [x] 버전별 staging 설치·npm lock 무결성·Node/프로토콜·상태 schema 확인과 drain·한도 중단 후 Turn 복구를 구현했다. npm 설치 계약 Fixture와 실제 tarball 격리 설치를 구분해 검증했다.
 - [x] Launcher 전환 포인터·이전 포인터 복구·READY·안정화·lastKnownGood·롤백·cooldown을 자식 프로세스 시험으로 확인했다.
 - [ ] npm/Dispatcher 불통, 설치 실패, 새 버전 실행 오류, 포인터 교체 중 충돌, 상태 schema 변경을 구별한다.
-- [ ] Worker ID·설정 캐시·로컬 인증·작업 공간·미게시 결과가 교체 전후 유지되는지 확인한다. 코드 롤백에서 이전 schema 캐시를 사용할 수 있는지 확인한다.
+- [x] 실제 npm tarball의 자동 전환·불량 버전 rollback 후 Worker ID·설정 캐시·인증 설정·작업 파일·미전달 결과가 유지되는 loopback 시험을 통과했다. 다른 state schema는 설치 전에 거절하며 사내 배포·실제 OS 로그인 시험은 남아 있다.
 - [ ] 중앙 YAML의 마운트 파일 교체·잘못된 수정·재시작 필요 항목·Secret 비노출을 시험하고 설정 적용 상태를 진단할 수 있게 한다.
 - [x] Docker 설정 디렉터리·데이터 볼륨·health·종료·SQLite 백업/복원 명령을 README에 작성하고 격리된 Linux CI에서 이미지 실행·재시작·볼륨 복원을 검증했다.
 - [ ] 실제 패키지명·레지스트리·지원 Node/런타임 버전과 일치하는 설치 안내를 README에 작성한다.

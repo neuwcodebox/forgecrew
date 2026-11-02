@@ -34,7 +34,8 @@ export async function bootstrap(directory:string,packageDirectory:string) {
 }
 export async function stageUpdate(directory:string,policy:UpdatePolicy,current:InstalledVersion,execute:Execute=command,signal?:AbortSignal):Promise<InstalledVersion|undefined> {
   // npm retains the user's local credentials, CA and proxy settings. No auth values enter arguments or logs.
-  const view=await execute('npm',['view',policy.package+'@'+policy.channel,'version','dist','--json','--registry',policy.registry],{timeout:60000,...(signal?{signal}:{})});
+  const registryArgs=['--registry',policy.registry,...(policy.package.startsWith('@')?['--'+policy.package.split('/')[0]+':registry='+policy.registry]:[])];
+  const view=await execute('npm',['view',policy.package+'@'+policy.channel,'version','dist','--json',...registryArgs],{timeout:60000,...(signal?{signal}:{})});
   if(view.code!==0)throw new Error('update_registry_unavailable');
   const candidate=JSON.parse(view.stdout) as {version:string;dist:{integrity:string;tarball:string}};
   if(!/^\d+\.\d+\.\d+(?:-[\w.-]+)?$/.test(candidate.version)||!/^sha512-[A-Za-z0-9+/]+=*$/.test(candidate.dist?.integrity))throw new Error('invalid_update_metadata');
@@ -49,7 +50,7 @@ export async function stageUpdate(directory:string,policy:UpdatePolicy,current:I
   const stage=await mkdtemp(join(directory,'staging','install-'));
   try {
     await atomicWrite(join(stage,'package.json'),{name:'forgecrew-install',version:'0.0.0',private:true});
-    const result=await execute('npm',['install',policy.package+'@'+candidate.version,'--prefix',stage,'--registry',policy.registry,'--ignore-scripts','--omit=dev','--engine-strict','--no-audit','--no-fund','--save-exact'],{timeout:300000,...(signal?{signal}:{})});
+    const result=await execute('npm',['install',policy.package+'@'+candidate.version,'--prefix',stage,...registryArgs,'--ignore-scripts','--omit=dev','--engine-strict','--no-audit','--no-fund','--save-exact'],{timeout:300000,...(signal?{signal}:{})});
     if(result.code!==0)throw new Error('update_install_failed');
     const lock=JSON.parse(await readFile(join(stage,'package-lock.json'),'utf8')) as {packages:Record<string,{integrity?:string;resolved?:string}>};
     const pkg='node_modules/'+policy.package;
