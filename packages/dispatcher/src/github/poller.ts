@@ -20,10 +20,10 @@ export class Poller {
     this.source = source;
     this.now = now;
   }
-  async writable(repository: string, user: string, config: Config) {
+  async writable(repository: string, user: string, config: Config, fresh = false) {
     const key = repository + ':' + user;
     const cached = this.permissions.get(key);
-    if (cached && cached.expires > this.now()) return cached.writable;
+    if (!fresh && cached && cached.expires > this.now()) return cached.writable;
     const writable = await this.source.permission(repository, user);
     this.permissions.set(key, { writable, expires: this.now() + config.github.permissionCacheTtl });
     return writable;
@@ -145,10 +145,10 @@ export class Poller {
           )
         )
           continue;
-        if (!(await this.writable(repository, comment.user.login, config))) continue;
         const created = Date.parse(comment.created_at);
         const updated = Date.parse(comment.updated_at);
         const control = parseControl(comment.body);
+        if (!(await this.writable(repository, comment.user.login, config, !!control))) continue;
         if (control) {
           if (created === updated)
             this.store.executions.addControl(

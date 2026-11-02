@@ -47,6 +47,63 @@ describe('GitHub polling normalization and checkpoints', () => {
     await p.pollRepository('team/project-a', c);
     expect(s.sqlite.prepare('SELECT COUNT(*) AS n FROM inputs').get()).toEqual({ n: 1 });
   });
+  it('rechecks Write permission for controls even when a recent cache still authorizes the requester', async () => {
+    const { s, c, source, id, now } = setup();
+    const poller = new Poller(s, source, () => now);
+    await poller.pollRepository('team/project-a', c);
+    const w = worker(now);
+    s.workers.register(w, 't'.repeat(48));
+    s.executions.claim(w.id, c);
+    const revoked: GitHubSource = {
+      ...source,
+      permission: async () => false,
+      comments: async (_repo, _since, review) =>
+        review
+          ? []
+          : [
+              {
+                id: 42,
+                body: '/ai stop',
+                created_at: new Date(now).toISOString(),
+                updated_at: new Date(now).toISOString(),
+                user: { login: 'writer', id: 123 },
+                issue_url: 'https://api.example/repos/team/project-a/issues/1',
+              },
+            ],
+    };
+    Object.assign(source, revoked);
+    await poller.pollRepository('team/project-a', c);
+    expect(s.executions.pendingControls(w.id)).toEqual([]);
+    expect(
+      s.sqlite.prepare('SELECT COUNT(*) AS n FROM controls WHERE session_id=?').get(id),
+    ).toEqual({ n: 0 });
+  });
+  it('recognizes newly granted Write permission for controls without waiting for a negative cache to expire', async () => {
+    const { s, c, source, now } = setup();
+    const comments = (body: string) => [
+      {
+        id: body === '/ai stop' ? 43 : 42,
+        body,
+        created_at: new Date(now).toISOString(),
+        updated_at: new Date(now).toISOString(),
+        user: { login: 'reader', id: 456 },
+        issue_url: 'https://api.example/repos/team/project-a/issues/1',
+      },
+    ];
+    const feed: GitHubSource = {
+      ...source,
+      comments: async (_r, _s, review) => (review ? [] : comments('ordinary context')),
+    };
+    const poller = new Poller(s, feed, () => now);
+    await poller.pollRepository('team/project-a', c);
+    const w = worker(now);
+    s.workers.register(w, 't'.repeat(48));
+    s.executions.claim(w.id, c);
+    feed.permission = async () => true;
+    feed.comments = async (_r, _s, review) => (review ? [] : comments('/ai stop'));
+    await poller.pollRepository('team/project-a', c);
+    expect(s.executions.pendingControls(w.id)[0]?.control).toEqual({ kind: 'stop' });
+  });
   it('does not run labels without authorized event evidence', async () => {
     const { s, c, source, id } = setup();
     source.permission = async () => false;
