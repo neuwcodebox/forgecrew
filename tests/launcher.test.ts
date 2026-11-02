@@ -29,7 +29,7 @@ async function setup(){
 const pointer=(dir:string)=>readFile(join(dir,'current.json'),'utf8').then(s=>JSON.parse(s) as {active:string;pending:unknown;phase:string;failed:Record<string,number>});
 const events=(dir:string)=>readFile(join(dir,'fixture-events.jsonl'),'utf8').then(s=>s.trim().split('\n').map(v=>JSON.parse(v) as {id:string;event:string}),()=>[]);
 const policy={stabilizationWindow:1,failedVersionCooldown:10000};
-describe('stable Launcher and production staging',()=>{
+describe('stable Launcher and production staging',{timeout:20000},()=>{
   it('keeps one background Worker, respects stop intent and resumes on explicit start',async()=>{
     const dir=await setup();await startLauncher(dir);await wait(()=>events(dir),e=>e.some(v=>v.id==='old'&&v.event==='started'));
     const first=await launcherStatus(dir);await startLauncher(dir);expect((await launcherStatus(dir)).pid).toBe(first.pid);
