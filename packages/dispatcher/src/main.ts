@@ -14,9 +14,10 @@ async function main() {
   await mkdir(initial.server.dataDir,{ recursive:true });
   const store = new Store(join(initial.server.dataDir,'forgecrew.sqlite'));
   const configs = new ConfigManager(source,config => store.saveConfig(config));
-  const poller = new Poller(store,new GitHubClient(initial,pat));
+  const github=new GitHubClient(initial,pat);
+  const poller = new Poller(store,github);
   let stopping = false;
-  const server = serve({ fetch:createApp(store,configs,registration).fetch,hostname:initial.server.listen,port:initial.server.port });
+  const server = serve({ fetch:createApp(store,configs,registration,claim=>github.preflight(claim)).fetch,hostname:initial.server.listen,port:initial.server.port });
   const pause = (ms: number) => new Promise<void>(resolve => { const t = setTimeout(resolve,ms); t.unref(); });
   const reload = (async () => {
     while (!stopping) {

@@ -3,8 +3,8 @@
 ## 현재 상태
 
 - 단계: **P1·P2 진행 중. Worker 실행·제어·결과 게시 경로의 로컬 통합 검증 완료**.
-- shared·dispatcher·worker 패키지에 중앙 YAML·SQLite·HTTP·기본 폴링과 두 Provider 어댑터를 구현했다. Worker의 setup/run/doctor, 독립 Heartbeat·Lease 감시, 격리 clone, 세션 재개, 완료 저널·게시 재조정, stop·steer를 연결했다.
-- `npm run check`: TypeScript 검사, Vitest 72개 테스트, tsdown 기반 세 패키지 JS 빌드, 빌드된 CLI·Dispatcher 프로세스 기동·SQLite·HTTP 인증·설정 재로드 smoke 검사를 통과했다. 로컬 검증 환경은 Linux / Node.js 24.22.1이다. Provider 프로세스와 GitHub 통합 Fixture를 실제 구독 실행과 구별한다. 사내 계정·실제 구독 모델 Turn·Windows 실제 사용자 환경·자동 업데이트 시험은 수행하지 않았다.
+- shared·dispatcher·worker 패키지에 중앙 YAML·SQLite·HTTP·활성화 구간·PR 리뷰·전체 재동기화 폴링과 두 Provider 어댑터를 구현했다. Worker의 setup/run/doctor, 독립 Heartbeat·Lease 감시, 격리 clone, 세션 재개, 완료 저널·게시 재조정, stop·steer를 연결했다. 실행 직전 중앙 권한·원본 댓글 검증과 시스템 라벨 동기화도 구현했다.
+- `npm run check`: TypeScript 검사, Vitest 79개 테스트, tsdown 기반 세 패키지 JS 빌드, 빌드된 CLI·Dispatcher 프로세스 기동·SQLite·HTTP 인증·설정 재로드 smoke 검사를 통과했다. 로컬 검증 환경은 Linux / Node.js 24.22.1이다. Provider 프로세스와 GitHub 통합 Fixture를 실제 구독 실행과 구별한다. 사내 계정·실제 구독 모델 Turn·Windows 실제 사용자 환경·자동 업데이트 시험은 수행하지 않았다.
 - Linux/Windows GitHub Actions 검사와 Dispatcher Dockerfile을 추가했다. CI 실행 결과와 Docker 이미지 빌드·실행은 로컬 smoke 결과와 별도로 확인한다.
 - 제품 정책과 배포 구조는 [SPEC](SPEC.md), 구체적인 동작 계약은 [TECH](TECH.md)를 기준으로 한다.
 - 외부 환경에서 제공할 값은 GHES 호스트·테스트 저장소·PAT, Dispatcher 주소, 사내 npm 레지스트리·scope다. Worker는 기존 `gh` 및 Codex/Claude 구독 로그인을 사용한다.
@@ -149,7 +149,7 @@
 
 ## 통합 검증 시나리오
 
-아래 표는 전체 제품 수용 시험이다. 현재 `tests/`의 72개 시험과 `scripts/smoke.mjs`는 설정·모델 선택·상태 전이·HTTP·기본 폴링·Provider 프로세스·Worker 실행/제어/게시·빌드 산출물 기동의 계약을 검증한다. 이 통과를 사내 GitHub·실제 구독 런타임·Windows 실제 사용자 환경·무인 업데이트의 종단간 시험 통과로 취급하지 않는다.
+아래 표는 전체 제품 수용 시험이다. 현재 `tests/`의 79개 시험과 `scripts/smoke.mjs`는 설정·모델 선택·상태 전이·HTTP·기본 폴링·Provider 프로세스·Worker 실행/제어/게시·빌드 산출물 기동의 계약을 검증한다. 이 통과를 사내 GitHub·실제 구독 런타임·Windows 실제 사용자 환경·무인 업데이트의 종단간 시험 통과로 취급하지 않는다.
 
 | ID | 시나리오 | 기대 결과 | 요구·단계 |
 |---|---|---|---|

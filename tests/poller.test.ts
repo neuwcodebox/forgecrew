@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { Store } from '../packages/dispatcher/src/store.ts';
-import { Poller } from '../packages/dispatcher/src/github.ts';
+import { Poller,GitHubClient } from '../packages/dispatcher/src/github.ts';
 import type { GitHubSource } from '../packages/dispatcher/src/github.ts';
 import { config, worker } from './helpers.ts';
 import { sessionId } from '../packages/shared/src/hash.ts';
@@ -49,5 +49,40 @@ describe('GitHub polling normalization and checkpoints',() => {
     ]};
     await new Poller(s,next,() => now).pollRepository('team/project-a',c);
     expect(s.sqlite.prepare("SELECT body FROM inputs WHERE source_kind='comment' AND session_id=?").all(id)).toEqual([{body:'human follow-up'}]);
+  });
+  it('recovers comments from earlier active windows while excluding the inactive gap',async()=>{
+    const {s,c,source,id}=setup();
+    const events=[
+      {id:1,event:'labeled',created_at:new Date(900000).toISOString(),actor:{login:'writer'},label:{name:'ai:enabled'}},
+      {id:2,event:'unlabeled',created_at:new Date(930000).toISOString(),actor:{login:'writer'},label:{name:'ai:enabled'}},
+      {id:3,event:'labeled',created_at:new Date(960000).toISOString(),actor:{login:'writer'},label:{name:'ai:enabled'}},
+    ];
+    const feed:GitHubSource={...source,events:async()=>events,comments:async(_r,_s,review)=>review?[]:[910000,940000,970000].map((at,i)=>({id:i+10,body:'comment '+at,created_at:new Date(at).toISOString(),updated_at:new Date(at).toISOString(),user:{login:'writer',id:123},issue_url:'https://api.example/repos/team/project-a/issues/1'}))};
+    await new Poller(s,feed,()=>1000000).pollRepository('team/project-a',c);
+    expect(s.sqlite.prepare("SELECT body FROM inputs WHERE session_id=? ORDER BY created_at").all(id)).toEqual([{body:'request'},{body:'comment 910000'},{body:'comment 970000'}]);
+  });
+  it('collects submitted PR review bodies and ignores drafts',async()=>{
+    const {s,c,source}=setup();
+    const feed:GitHubSource={...source,issues:async()=>[{number:1,body:'request',pull_request:{},labels:['ai:enabled'],user:{login:'writer'}}],reviews:async()=>[
+      {id:1,state:'PENDING',body:'draft',submitted_at:null,user:{login:'writer',id:123}},
+      {id:2,state:'COMMENTED',body:'review request',submitted_at:new Date(950000).toISOString(),user:{login:'writer',id:123}},
+    ]};
+    const poller=new Poller(s,feed,()=>1000000);await poller.pollRepository('team/project-a',c);await poller.pollRepository('team/project-a',c);
+    expect(s.sqlite.prepare("SELECT body FROM inputs WHERE source_kind='review'").all()).toEqual([{body:'review request'}]);
+  });
+  it('performs periodic full reconciliation independently of incremental checkpoints',async()=>{
+    const {s,c,source}=setup();let clock=1000000;const seen:string[]=[];
+    const feed:GitHubSource={...source,issues:async(_repo,since)=>{seen.push(since);return await source.issues();}};
+    const p=new Poller(s,feed,()=>clock);await p.pollRepository('team/project-a',c);clock+=1000;await p.pollRepository('team/project-a',c);clock+=c.github.polling.reconcileInterval;await p.pollRepository('team/project-a',c);
+    expect(seen[0]).toBe(new Date(0).toISOString());expect(seen[1]).not.toBe(new Date(0).toISOString());expect(seen[2]).toBe(new Date(0).toISOString());
+  });
+  it('only changes labels owned by the status and worker prefixes',async()=>{
+    const client=new GitHubClient(config(),'fixture');const removed:string[]=[],added:string[]=[];
+    Object.assign(client.api.issues,{
+      get:async()=>({data:{labels:['bug','ai:model:sol','ai:status:idle']}}),getLabel:async()=>({}),
+      addLabels:async(p:{labels:string[]})=>{added.push(...p.labels);},removeLabel:async(p:{name:string})=>{removed.push(p.name);},
+    });
+    await client.syncLabels('team/project-a',1,['ai:status:running'],['ai:status:','ai:worker:']);
+    expect(removed).toEqual(['ai:status:idle']);expect(added).toEqual(['ai:status:running']);
   });
 });

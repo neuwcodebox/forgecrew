@@ -15,7 +15,7 @@ import { validateRunConfig } from '../../shared/src/protocol.ts';
 import { validateProjection } from '../../shared/src/config.ts';
 import type { Projection } from '../../shared/src/config.ts';
 
-type Active={claim:WorkClaim;clock:LeaseClock;controller:AbortController;run?:ProviderRun;task:Promise<void>;reason?:'stop'|'shutdown'|'lease_lost'|'steer';};
+type Active={claim:WorkClaim;clock:LeaseClock;controller:AbortController;run?:ProviderRun;task:Promise<void>;reason?:'stop'|'shutdown'|'lease_lost'|'steer'|'refresh';};
 type Heartbeat={configRevision:string;controls:{id:string;attemptId:string;control:Control}[]};
 type Dependencies={client?:DispatcherClient;github?:GhClient;providers?:Partial<Record<Engine,Provider>>};
 const code=(error:unknown)=>error instanceof Error&&/^[a-z_]+$/.test(error.message)?error.message:'worker_operation_failed';
@@ -142,14 +142,17 @@ export class WorkerRuntime {
       active.run=this.providers[claim.runConfig.engine]!.run({claim,context,workspace,...(resume?{resume}:{}),signal:active.controller.signal,onSession:state=>atomicWrite(sessionPath,state)});
       result=await active.run.result;
     }catch(error) {
-      if(!active.reason)result={kind:'failed',text:'Worker 실행 실패: '+code(error),origin:'runtime'};
+      if(!active.reason) {
+        if(['input_changed_before_start','input_deleted','requester_no_longer_has_write_access'].includes(code(error)))active.reason='refresh';
+        else result={kind:'failed',text:'Worker 실행 실패: '+code(error),origin:'runtime'};
+      }
     }finally {
       await active.run?.close();
     }
     const identity={attemptId:claim.attemptId,generation:claim.generation};
     if(active.reason==='steer')return;
     if(active.reason==='stop') {await this.client.request('/v1/cancel',identity);return;}
-    if(active.reason==='shutdown'||active.reason==='lease_lost') {
+    if(active.reason==='shutdown'||active.reason==='lease_lost'||active.reason==='refresh') {
       await this.client.request('/v1/release',identity).catch(()=>{});return;
     }
     if(result) {
@@ -200,7 +203,12 @@ export class WorkerRuntime {
       try{await this.initialize(registrationToken);break;}catch(error){this.log('worker_reconnecting',code(error));await delay(backoff,undefined,{signal}).catch(()=>{});backoff=Math.min(backoff*2,30000);}
     }
     const loop=async(task:()=>Promise<void>|void,interval:()=>number)=>{
-      while(!signal.aborted){try{await task();}catch(error){this.log('worker_retrying',code(error));}await delay(interval(),undefined,{signal}).catch(()=>{});}
+      let failureDelay=0;
+      while(!signal.aborted){
+        try{await task();failureDelay=0;}
+        catch(error){this.log('worker_retrying',code(error));const policy=this.projection?.payload.runtime.reconnect;failureDelay=Math.min(failureDelay?failureDelay*2:policy?.initialDelay??1000,policy?.maxDelay??30000);}
+        await delay(failureDelay||interval(),undefined,{signal}).catch(()=>{});
+      }
     };
     await Promise.all([
       loop(()=>this.heartbeat(),()=>this.projection?.payload.runtime.heartbeatInterval??15000),

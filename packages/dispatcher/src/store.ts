@@ -18,12 +18,15 @@ type Turn = { id: string; input_id: string; session_id: string; status: string; 
 export type Attempt = { id: string; turn_id: string; session_id: string; worker_id: string; generation: number; status: string; started_at: number; ended_at: number | null; lease_until: number; lease_duration: number; interrupt_grace: number; reassign_grace: number; result_hash: string | null };
 export type Delivery = { id: string; session_id: string; turn_id: string; body: string; body_hash: string; expected_author: string | null; status: string; worker_id: string | null; claim_until: number | null; github_id: string | null };
 export type { RunConfig } from '../../shared/src/protocol.ts';
+export type ActivationWindow={openedAt:number;closedAt:number|null};
+export type Preflight={status:'ready'|'hold'|'cancel';body?:string;reason?:string};
 
 const migration = `
 CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY);
 CREATE TABLE IF NOT EXISTS config_snapshots (revision TEXT PRIMARY KEY, payload TEXT NOT NULL, created_at INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS workers (id TEXT PRIMARY KEY, token_hash TEXT NOT NULL, capabilities TEXT NOT NULL, seen_at INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS sessions (id TEXT PRIMARY KEY, host TEXT NOT NULL, repository TEXT NOT NULL, kind TEXT NOT NULL, number INTEGER NOT NULL, active INTEGER NOT NULL, activation_at INTEGER NOT NULL, labels TEXT NOT NULL, previous_worker TEXT, blocked_reason TEXT, UNIQUE(host,repository,kind,number));
+CREATE TABLE IF NOT EXISTS activation_windows (session_id TEXT NOT NULL REFERENCES sessions(id), opened_at INTEGER NOT NULL, closed_at INTEGER, PRIMARY KEY(session_id,opened_at));
 CREATE TABLE IF NOT EXISTS inputs (id TEXT PRIMARY KEY, session_id TEXT NOT NULL REFERENCES sessions(id), source_kind TEXT NOT NULL, source_id TEXT NOT NULL, body TEXT NOT NULL, author TEXT NOT NULL, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, status TEXT NOT NULL, UNIQUE(session_id,source_kind,source_id));
 CREATE TABLE IF NOT EXISTS turns (id TEXT PRIMARY KEY, input_id TEXT NOT NULL UNIQUE REFERENCES inputs(id), session_id TEXT NOT NULL REFERENCES sessions(id), status TEXT NOT NULL, run_config TEXT, generation INTEGER NOT NULL DEFAULT 0, result TEXT);
 CREATE TABLE IF NOT EXISTS attempts (id TEXT PRIMARY KEY, turn_id TEXT NOT NULL REFERENCES turns(id), session_id TEXT NOT NULL REFERENCES sessions(id), worker_id TEXT NOT NULL REFERENCES workers(id), generation INTEGER NOT NULL, status TEXT NOT NULL, started_at INTEGER NOT NULL, ended_at INTEGER, lease_until INTEGER NOT NULL, lease_duration INTEGER NOT NULL, interrupt_grace INTEGER NOT NULL, reassign_grace INTEGER NOT NULL, result_hash TEXT);
@@ -74,26 +77,42 @@ export class Store {
     if (id !== capabilities.id) throw new ContractError('worker_identity_mismatch', 403);
     this.sqlite.prepare('UPDATE workers SET capabilities=?,seen_at=? WHERE id=?').run(JSON.stringify(capabilities), this.now(), id);
   }
-  upsertSession(key: SessionKey, labels: string[], active: boolean, activationAt: number, body: string, author: string): string {
+  upsertSession(key: SessionKey, labels: string[], active: boolean, activationAt: number, body: string, author: string,windows?:ActivationWindow[]): string {
     const id = sessionId(key);
     this.sqlite.transaction(() => {
       const previous = this.getSession(id);
       this.sqlite.prepare(`INSERT INTO sessions(id,host,repository,kind,number,active,activation_at,labels) VALUES (?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET active=excluded.active,activation_at=excluded.activation_at,labels=excluded.labels`).run(id, key.host.toLowerCase(), key.repository.toLowerCase(), key.kind, key.number, Number(active), activationAt, JSON.stringify(labels));
-      if (!previous && active) this.enqueue(id, 'initial', id, body, author, activationAt, activationAt);
+      if(windows) {
+        this.sqlite.prepare('DELETE FROM activation_windows WHERE session_id=?').run(id);
+        for(const w of windows)this.sqlite.prepare('INSERT INTO activation_windows VALUES (?,?,?) ON CONFLICT(session_id,opened_at) DO UPDATE SET closed_at=excluded.closed_at').run(id,w.openedAt,w.closedAt);
+      }
+      if(windows?.length&&!this.sqlite.prepare("SELECT 1 FROM inputs WHERE session_id=? AND source_kind='initial'").get(id))this.enqueue(id,'initial',id,body,author,windows[0]!.openedAt,windows[0]!.openedAt);
+      else if (!previous && active) this.enqueue(id, 'initial', id, body, author, activationAt, activationAt);
       else if (previous && active && !this.sqlite.prepare("SELECT 1 FROM inputs WHERE session_id=? AND source_kind='initial'").get(id)) this.enqueue(id, 'initial', id, body, author, activationAt, activationAt);
     }).immediate();
     return id;
   }
   getSession(id: string): Session | undefined { return this.sqlite.prepare('SELECT * FROM sessions WHERE id=?').get(id) as Session | undefined; }
+  sessions(repository:string):Session[] {return this.sqlite.prepare('SELECT * FROM sessions WHERE repository=? ORDER BY number').all(repository.toLowerCase()) as Session[];}
+  sessionStatus(session:Session) {
+    const active=this.sqlite.prepare("SELECT worker_id FROM attempts WHERE session_id=? AND status IN ('running','stopping')").get(session.id) as {worker_id:string}|undefined;
+    const reason=(this.sqlite.prepare('SELECT blocked_reason FROM sessions WHERE id=?').get(session.id) as {blocked_reason:string|null}).blocked_reason;
+    const queued=this.sqlite.prepare("SELECT 1 FROM inputs WHERE session_id=? AND status='queued'").get(session.id)||this.sqlite.prepare("SELECT 1 FROM turns WHERE session_id=? AND status='recovering'").get(session.id);
+    const latest=this.sqlite.prepare('SELECT status FROM turns WHERE session_id=? ORDER BY rowid DESC LIMIT 1').get(session.id) as {status:string}|undefined;
+    return {worker:active?.worker_id??session.previous_worker,status:active?'running':!session.active?'idle':reason?'blocked':queued?'queued':latest?.status==='failed'?'error':'idle'};
+  }
   enqueue(session: string, kind: string, source: string, body: string, author: string, createdAt: number, updatedAt = createdAt): boolean {
     const s = this.getSession(session);
-    if (!s || !s.active || createdAt < s.activation_at || !body.trim()) return false;
+    if (!s || !body.trim()) return false;
     const id = hash([s.host,kind,source]);
     const old = this.sqlite.prepare('SELECT * FROM inputs WHERE id=?').get(id) as Input | undefined;
     if (old) {
       if (old.status === 'queued') this.sqlite.prepare('UPDATE inputs SET body=?,updated_at=? WHERE id=? AND updated_at<=?').run(body, updatedAt, id, updatedAt);
       return false;
     }
+    const hasWindows=this.sqlite.prepare('SELECT 1 FROM activation_windows WHERE session_id=? LIMIT 1').get(session);
+    const eligible=hasWindows?this.sqlite.prepare('SELECT 1 FROM activation_windows WHERE session_id=? AND opened_at<=? AND (closed_at IS NULL OR closed_at>?) LIMIT 1').get(session,createdAt,createdAt):s.active&&createdAt>=s.activation_at;
+    if(!eligible)return false;
     this.sqlite.prepare('INSERT INTO inputs VALUES (?,?,?,?,?,?,?,?,?)').run(id, session, kind, source, body, author, createdAt, updatedAt, 'queued');
     return true;
   }
@@ -166,6 +185,21 @@ export class Store {
       const a=this.owned(id,worker,generation);if(a.status==='terminal')return;
       this.sqlite.prepare("UPDATE attempts SET status='terminal',ended_at=? WHERE id=?").run(this.now(),id);
       this.sqlite.prepare("UPDATE turns SET status='recovering' WHERE id=?").run(a.turn_id);
+    }).immediate();
+  }
+  preflight(id:string,worker:string,generation:number,decision:Preflight):boolean {
+    return this.sqlite.transaction(()=>{
+      const a=this.owned(id,worker,generation);
+      if(a.status==='terminal'||a.lease_until<=this.now())throw new ContractError('lease_expired');
+      const input=this.sqlite.prepare('SELECT i.* FROM inputs i JOIN turns t ON t.input_id=i.id WHERE t.id=?').get(a.turn_id) as Input;
+      if(decision.status==='ready'&&(decision.body===undefined||decision.body===input.body))return true;
+      this.sqlite.prepare("UPDATE attempts SET status='terminal',ended_at=? WHERE id=?").run(this.now(),id);
+      this.sqlite.prepare('UPDATE turns SET status=? WHERE id=?').run(decision.status==='cancel'?'cancelled':'recovering',a.turn_id);
+      if(decision.status==='cancel')this.sqlite.prepare("UPDATE inputs SET status='consumed' WHERE id=?").run(input.id);
+      if(decision.body!==undefined)this.sqlite.prepare('UPDATE inputs SET body=?,updated_at=? WHERE id=?').run(decision.body,this.now(),input.id);
+      if(decision.status==='hold')this.sqlite.prepare('UPDATE sessions SET blocked_reason=? WHERE id=?').run(decision.reason??'input_verification_pending',a.session_id);
+      if(decision.reason==='session_disabled')this.sqlite.prepare('UPDATE sessions SET active=0 WHERE id=?').run(a.session_id);
+      return false;
     }).immediate();
   }
   restartSteer(id:string,worker:string,generation:number,controlId:string) {

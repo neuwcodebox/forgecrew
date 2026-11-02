@@ -20,3 +20,9 @@
 `tests/providers.test.ts`는 별도 프로세스 Fixture로 질문·모델 불일치·steer·Claude 설정 확인을 시험한다. `tests/runtime.test.ts`는 실제 Hono API와 SQLite를 연결해 실행·세션 재개·지침 변경·완료 ACK 유실·게시 응답 유실·stop·Claude steer·중복 기동 방지를 검증한다. Fixture 통과는 실제 계정·회사 정책·네트워크 환경의 승인으로 간주하지 않는다.
 
 공식 자료: [Codex App Server](https://learn.chatgpt.com/docs/app-server), [Codex Auto-review](https://learn.chatgpt.com/docs/sandboxing/auto-review), [Claude CLI](https://code.claude.com/docs/en/cli-reference), [Claude headless](https://code.claude.com/docs/en/headless).
+
+## GitHub 입력과 실행 경계
+
+활성화 이력을 구간으로 저장해 비활성 중 댓글을 제외하고, 지연 수집된 활성 구간의 입력은 보존한다. 증분 커서와 별도로 전체 객체·댓글 재동기화를 수행하고 PR 리뷰 본문도 수집한다. Claim 뒤 Provider 실행 전에 중앙 PAT로 현재 Write 권한·활성 라벨·원본 입력을 확인한다. 편집된 입력은 같은 논리 Turn의 다음 Attempt에서 갱신하고, 삭제된 입력은 취소하며 조회 실패는 보류한다. 상태·담당 라벨은 설정된 시스템 prefix만 변경한다.
+
+종료 시 진행 중 제어 ACK와 로컬 기록 완료를 기다려 저널 정리와 경합하지 않게 했다. 폴링·상태 저장·Worker 통합 계약의 관련 34개 시험을 통과했다.

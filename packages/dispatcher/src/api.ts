@@ -6,6 +6,8 @@ import type { ConfigManager } from '../../shared/src/config.ts';
 import { secretEqual } from '../../shared/src/hash.ts';
 import { ContractError, efforts, families } from '../../shared/src/types.ts';
 import type { Store } from './store.ts';
+import type { Preflight } from './store.ts';
+import type { WorkClaim } from '../../shared/src/protocol.ts';
 
 const model = z.strictObject({
   family: z.enum(families), id: z.string().min(1).max(200), version: z.array(z.number().int().nonnegative()).min(1).max(8),
@@ -20,7 +22,7 @@ export const capabilitiesSchema = z.strictObject({
 const identity = z.strictObject({ attemptId: z.string().uuid(), generation: z.number().int().positive() });
 const completed = identity.extend({ result: z.strictObject({ kind: z.enum(['completed','needs_reply','failed']), text: z.string().min(1).max(2000000), links: z.array(z.url()).max(100).optional(),origin:z.enum(['ai','runtime']).optional() }) });
 
-export function createApp(store: Store, configs: ConfigManager, registrationToken: string) {
+export function createApp(store: Store, configs: ConfigManager, registrationToken: string,verifyInput?:(claim:WorkClaim)=>Promise<Preflight>) {
   const app = new Hono<{ Variables: { worker: string } }>();
   app.use('*', bodyLimit({ maxSize: 4 * 1024 * 1024 }));
   app.onError((error, c) => {
@@ -52,7 +54,15 @@ export function createApp(store: Store, configs: ConfigManager, registrationToke
     const capabilities = capabilitiesSchema.parse(await c.req.json()); store.heartbeat(c.get('worker'),capabilities);
     return c.json({ configRevision: configRevision(configs.current), controls: store.controls(c.get('worker')) });
   });
-  app.post('/v1/claim', c => c.json({ claim: store.claim(c.get('worker'),configs.current) }));
+  app.post('/v1/claim',async c=>{
+    const claim=store.claim(c.get('worker'),configs.current);
+    if(claim&&verifyInput) {
+      let decision:Preflight;
+      try{decision=await verifyInput(claim);}catch{store.preflight(claim.attemptId,c.get('worker'),claim.generation,{status:'hold',reason:'input_verification_unavailable'});throw new ContractError('input_verification_unavailable',503);}
+      if(!store.preflight(claim.attemptId,c.get('worker'),claim.generation,decision))return c.json({claim:null});
+    }
+    return c.json({claim});
+  });
   app.post('/v1/renew', async c => {
     const r = identity.parse(await c.req.json()); return c.json(store.renew(r.attemptId,c.get('worker'),r.generation));
   });

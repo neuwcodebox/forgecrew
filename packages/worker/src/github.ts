@@ -40,7 +40,12 @@ export class GhClient {
       if(source.body!==claim.input.body)throw new Error('input_changed_before_start');
     }
     let pull:unknown;
-    if(claim.session.kind==='pull')pull=await this.api(`repos/${claim.session.repository}/pulls/${claim.session.number}`);
+    if(claim.session.kind==='pull') {
+      const details=await this.api(`repos/${claim.session.repository}/pulls/${claim.session.number}`);
+      const reviews=await this.pages(`repos/${claim.session.repository}/pulls/${claim.session.number}/reviews?per_page=100`);
+      const reviewComments=await this.pages(`repos/${claim.session.repository}/pulls/${claim.session.number}/comments?per_page=100`);
+      pull={details,reviews,reviewComments};
+    }
     return JSON.stringify({issue,comments,pull});
   }
   async workspace(directory:string,session:WorkSession):Promise<string> {

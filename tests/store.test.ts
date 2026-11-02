@@ -73,6 +73,19 @@ describe('SQLite ownership, FIFO and recovery',() => {
   it('prevents re-registering an existing Worker ID with a different secret',() => {
     const {s,w}=setup();expect(() => s.register(w,'b'.repeat(48))).toThrow('worker_identity_conflict');expect(s.authenticate(w.id,'b'.repeat(48))).toBe(false);
   });
+  it('refreshes a changed queued source before execution without creating another logical Turn',()=>{
+    const {s,c,w}=setup();const a=s.claim(w.id,c)!;
+    expect(s.preflight(a.attemptId,w.id,a.generation,{status:'ready',body:'edited before execution'})).toBe(false);
+    const b=s.claim(w.id,c)!;expect(b.turnId).toBe(a.turnId);expect(b.input.body).toBe('edited before execution');expect(b.generation).toBe(2);
+  });
+  it('cancels a deleted input before a Worker can execute it',()=>{
+    const {s,c,w}=setup();const a=s.claim(w.id,c)!;
+    expect(s.preflight(a.attemptId,w.id,a.generation,{status:'cancel',reason:'input_deleted'})).toBe(false);expect(s.claim(w.id,c)).toBeNull();
+  });
+  it('attributes pure runtime failures as automation',()=>{
+    const {s,c,w}=setup();const a=s.claim(w.id,c)!;s.complete(a.attemptId,w.id,a.generation,{kind:'failed',origin:'runtime',text:'connection unavailable'});
+    const d=s.claimDelivery(w.id,c.runtime.leaseDuration)!;expect(d.body).toContain('Automated');expect(d.body).not.toContain('AI-generated');
+  });
 });
 
 describe('authenticated HTTP contract',() => {
