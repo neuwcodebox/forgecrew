@@ -11,6 +11,9 @@ describe('central configuration',() => {
   it('parses the complete example and preserves prompt whitespace',() => {
     const c=config(); expect(c.runtime.leaseDuration).toBe(90000); expect(c.agent.instructions.endsWith('\n')).toBe(true);
   });
+  it('parses LF and CRLF configuration files identically',() => {
+    expect(parseConfig(configSource.replace(/\n/g,'\r\n'))).toEqual(parseConfig(configSource));
+  });
   it.each([
     configSource+'\nschemaVersion: 1\n',configSource.replace('leaseDuration: 90s','leaseDuration: 20s'),
     configSource.replace('reassignGrace: 15s','reassignGrace: 5s'),configSource+'\nunknown: true\n',

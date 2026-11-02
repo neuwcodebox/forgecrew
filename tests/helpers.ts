@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { parseConfig } from '../packages/shared/src/config.ts';
 import type { WorkerCapabilities } from '../packages/shared/src/types.ts';
 
-export const configSource = readFileSync(new URL('../config.example.yaml',import.meta.url),'utf8');
+export const configSource = readFileSync(new URL('../config.example.yaml',import.meta.url),'utf8').replace(/\r\n/g,'\n');
 export function config() { return parseConfig(configSource); }
 export function worker(now = 1000000, patch: Partial<WorkerCapabilities> = {}): WorkerCapabilities {
   return {
