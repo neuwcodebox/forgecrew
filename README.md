@@ -39,7 +39,9 @@ node packages/worker/dist/cli.js status
 node packages/worker/dist/cli.js stop
 ```
 
-Worker는 해당 PC의 `gh`·Git·선택한 AI 실행 파일과 기존 로그인을 사용합니다. `run`은 포그라운드 실행이며 같은 Worker의 중복 실행을 방지합니다. `SIGINT`/`SIGTERM`으로 종료하면 실행 중 프로세스를 정리하고 미전달 결과를 보존합니다. `start`는 별도 Launcher를 백그라운드로 실행하며 `stop`은 의도적 종료를 기록합니다. 같은 설정으로 setup을 다시 실행하면 Launcher를 복구할 수 있습니다. 이때 실행 중인 Launcher를 먼저 중지하세요. 데이터 위치는 `FORGECREW_DATA_DIR`로 지정할 수 있습니다.
+Worker는 해당 PC의 `gh`·Git·선택한 AI 실행 파일과 기존 로그인을 사용합니다. `run`은 포그라운드 실행이며 같은 Worker의 중복 실행을 방지합니다. `SIGINT`/`SIGTERM`으로 종료하면 실행 중 프로세스를 정리하고 미전달 결과를 보존합니다. `status`는 Launcher 상태와 인증된 Dispatcher의 세션·Attempt·Lease·대기 이유·설정 revision을 함께 출력합니다. `doctor`는 로컬 실행 파일·로그인과 Dispatcher 등록/연결을 확인합니다. 일상 진단에는 프롬프트·입력 본문·인증 토큰을 포함하지 않습니다.
+
+`start`는 별도 Launcher를 백그라운드로 실행하며 `stop`은 의도적 종료를 기록합니다. 같은 설정으로 setup을 다시 실행하면 Launcher를 복구할 수 있습니다. 이때 실행 중인 Launcher를 먼저 중지하세요. 데이터 위치는 `FORGECREW_DATA_DIR`로 지정할 수 있습니다.
 
 `setup --autostart` 또는 `autostart enable`로 Linux 사용자 systemd 서비스·Windows 사용자 로그온 작업을 등록합니다. 해제는 `autostart disable`입니다. Linux 사용자 서비스 관리자가 없다면 Launcher를 기존 사용자 프로세스 관리자에 연결해야 합니다. 자동 시작의 실제 로그인 시험은 아직 수행하지 않았습니다.
 
@@ -117,7 +119,7 @@ Worker가 게시하는 AI 답변에는 다음과 같은 작은 표기를 자동�
 
 <sub>🤖 AI-generated · ForgeCrew</sub>
 
-직접 생성하는 PR 본문 등에도 같은 표기를 사용하도록 안내하고 확인 가능한 결과를 점검합니다. 런타임이 강제하는 게시 경로와 직접 작성 경로의 범위는 TECH에 정의되어 있습니다.
+직접 생성하는 PR 본문 등에도 같은 표기를 사용하도록 안내합니다. 최종 응답이 링크한 같은 저장소의 신규 PR은 실제 작성 계정·생성 시각을 대조해 표기를 점검하고, 누락을 Worker 로그의 `output_attribution_missing`으로 남깁니다. 런타임이 강제하는 게시 경로와 직접 작성 경로의 범위는 TECH에 정의되어 있습니다.
 
 ## 개발 문서
 

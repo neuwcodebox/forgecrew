@@ -25,6 +25,7 @@ export type WorkerCapabilities = {
   repositories: string[];
   models: Model[];
   draining: boolean;
+  configRevision?:string|undefined;
 };
 export type SessionKey = { host: string; repository: string; kind: 'issue' | 'pull'; number: number };
 export type Control = { kind: 'stop' } | { kind: 'steer'; text: string };

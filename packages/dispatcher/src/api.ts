@@ -1,4 +1,5 @@
 import { Hono } from 'hono';
+import { setTimeout as delay } from 'node:timers/promises';
 import { bodyLimit } from 'hono/body-limit';
 import { z } from 'zod';
 import { configRevision, workerProjection } from '../../shared/src/config.ts';
@@ -17,7 +18,7 @@ const model = z.strictObject({
 export const capabilitiesSchema = z.strictObject({
   id: z.string().uuid(), githubLogin: z.string().min(1).max(100), githubId: z.string().regex(/^\d+$/), version: z.string().min(1).max(100),
   schemaVersions: z.array(z.number().int().positive()).max(10), maxConcurrentSessions: z.number().int().min(1).max(100),
-  repositories: z.array(z.string().regex(/^[\w.-]+\/[\w.-]+$/)).max(1000), models: z.array(model).max(1000), draining: z.boolean(),
+  repositories: z.array(z.string().regex(/^[\w.-]+\/[\w.-]+$/)).max(1000), models: z.array(model).max(1000), draining: z.boolean(),configRevision:z.string().regex(/^[0-9a-f]{64}$/).optional(),
 });
 const identity = z.strictObject({ attemptId: z.string().uuid(), generation: z.number().int().positive() });
 const completed = identity.extend({ result: z.strictObject({ kind: z.enum(['completed','needs_reply','failed']), text: z.string().min(1).max(2000000), links: z.array(z.url()).max(100).optional(),origin:z.enum(['ai','runtime']).optional() }) });
@@ -45,6 +46,7 @@ export function createApp(store: Store, configs: ConfigManager, registrationToke
     if (!store.authenticate(worker,bearer)) throw new ContractError('unauthorized',401);
     c.set('worker',worker); await next();
   });
+  app.get('/v1/status',c=>c.json({...store.status(c.get('worker')),configRevision:configRevision(configs.current),configError:configs.lastError}));
   app.get('/v1/config/:revision', c => {
     const projection = workerProjection(store.getConfig(c.req.param('revision')));
     if (c.req.header('If-None-Match') === '"' + projection.payloadHash + '"') return c.body(null,304);
@@ -55,7 +57,15 @@ export function createApp(store: Store, configs: ConfigManager, registrationToke
     return c.json({ configRevision: configRevision(configs.current), controls: store.controls(c.get('worker')) });
   });
   app.post('/v1/claim',async c=>{
-    const claim=store.claim(c.get('worker'),configs.current);
+    const deadline=Date.now()+(c.req.query('wait')==='1'?configs.current.runtime.longPollTimeout:0);
+    let claim;
+    do{
+      if(c.req.raw.signal.aborted)break;
+      claim=store.claim(c.get('worker'),configs.current);
+      if(claim||Date.now()>=deadline||store.hasDelivery(c.get('worker')))break;
+      await delay(Math.min(250,Math.max(1,deadline-Date.now())),undefined,{signal:c.req.raw.signal}).catch(()=>{});
+    }while(!c.req.raw.signal.aborted);
+    claim??=null;
     if(claim&&verifyInput) {
       let decision:Preflight;
       try{decision=await verifyInput(claim);}catch{store.preflight(claim.attemptId,c.get('worker'),claim.generation,{status:'hold',reason:'input_verification_unavailable'});throw new ContractError('input_verification_unavailable',503);}

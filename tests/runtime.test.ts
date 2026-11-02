@@ -52,7 +52,8 @@ async function setup(options:{loseCompletion?:boolean;engine?:'codex'|'claude';s
   if(options.engine==='claude')provider.probe=async()=>[{...worker(Date.now()).models[0]!,engine:'claude',family:'opus',id:'claude-opus-5-5',version:[5,5]}];
   const secondProvider=new FakeProvider();secondProvider.probe=async()=>[{...worker(Date.now()).models[0]!,engine:'claude',family:'opus',id:'claude-opus-5-5',version:[5,5]}];
   const github=new FakeGithub(local.hostname,dir);
-  const runtime=new WorkerRuntime(local,dir,{client:new DispatcherClient(local,fetcher),github,providers:{[options.engine??'codex']:provider,...(options.secondEngine?{claude:secondProvider}:{})}});
+  const logs:Record<string,unknown>[]=[];
+  const runtime=new WorkerRuntime(local,dir,{logger:r=>logs.push(r),client:new DispatcherClient(local,fetcher),github,providers:{[options.engine??'codex']:provider,...(options.secondEngine?{claude:secondProvider}:{})}});
   cleanup.push(()=>runtime.settleControls());
   const key={host:local.hostname,repository:'team/project-a',kind:'issue' as const,number:1};
   const id=s.upsertSession(key,options.engine==='claude'?['ai:enabled','ai:model:opus']:['ai:enabled'],true,Date.now(),'request','writer');
@@ -60,10 +61,10 @@ async function setup(options:{loseCompletion?:boolean;engine?:'codex'|'claude';s
   const peer=async()=>{
     const peerLocal={...local,id:randomUUID(),token:'p'.repeat(48)},peerDir=join(dir,'peer'),peerGithub=new FakeGithub(local.hostname,peerDir),peerProvider=new FakeProvider();
     peerGithub.accountId=456;peerGithub.accountLogin='peer';peerGithub.posted=github.posted;
-    const peerRuntime=new WorkerRuntime(peerLocal,peerDir,{client:new DispatcherClient(peerLocal,fetcher),github:peerGithub,providers:{codex:peerProvider}});
+    const peerRuntime=new WorkerRuntime(peerLocal,peerDir,{logger:r=>logs.push(r),client:new DispatcherClient(peerLocal,fetcher),github:peerGithub,providers:{codex:peerProvider}});
     cleanup.push(()=>peerRuntime.settleControls());await peerRuntime.initialize('r'.repeat(48));return {runtime:peerRuntime,provider:peerProvider,github:peerGithub,local:peerLocal};
   };
-  return {s,configs,dir,local,runtime,provider,secondProvider,github,id,key,peer,tick:(ms:number)=>{offset+=ms;}};
+  return {s,configs,dir,local,runtime,provider,secondProvider,github,id,key,peer,logs,tick:(ms:number)=>{offset+=ms;}};
 }
 describe('Dispatcher and Worker integration',()=>{
   it('claims, executes, journals and publishes, then resumes with the next central instructions',async()=>{
@@ -234,6 +235,19 @@ describe('Dispatcher and Worker integration',()=>{
     const f=await setup();f.github.context=async()=>{throw new Error('github_request_failed');};
     await f.runtime.work();await Promise.all([...f.runtime.active.values()].map(a=>a.task));await f.runtime.work();
     expect(f.provider.requests).toHaveLength(0);expect(f.github.posted).toHaveLength(0);expect(f.s.sqlite.prepare('SELECT status FROM turns').get()).toEqual({status:'recovering'});
+  });
+
+  it('logs execution identifiers and applied revisions without logging prompt or token values',async()=>{
+    const f=await setup();await f.runtime.work();await Promise.all([...f.runtime.active.values()].map(a=>a.task));const claim=f.provider.requests[0]!.claim;
+    expect(f.logs.find(r=>r.event==='attempt_started')).toMatchObject({workerId:f.local.id,attemptId:claim.attemptId,sessionId:f.id,turnId:claim.turnId,configRevision:claim.runConfig.configRevision,model:claim.runConfig.model});
+    expect(JSON.stringify(f.logs)).not.toContain(f.local.token);expect(JSON.stringify(f.logs)).not.toContain(claim.runConfig.payload.agent.instructions);
+    const status=await f.runtime.client.request<{worker:{configRevision:string}}>('/v1/status',undefined,{method:'GET'});expect(status.worker.configRevision).toBe(claim.runConfig.configRevision);
+  });
+
+  it('reports an observable PR attribution warning after durably accepting the completed answer',async()=>{
+    const f=await setup();f.github.verifyOutput=async()=>[99];await f.runtime.work();await Promise.all([...f.runtime.active.values()].map(a=>a.task));
+    expect(f.s.sqlite.prepare('SELECT status FROM turns').get()).toEqual({status:'completed'});expect(f.logs.some(r=>r.event==='output_attribution_missing'&&r.pullNumber===99)).toBe(true);
+    expect(f.s.sqlite.prepare('SELECT COUNT(*) AS n FROM deliveries').get()).toEqual({n:1});
   });
 
 });

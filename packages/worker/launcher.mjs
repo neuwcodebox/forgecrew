@@ -45,7 +45,7 @@ async function installed(directory,id) {
 }
 export async function runLauncher(directory) {
   await mkdir(directory,{recursive:true,mode:0o700});const release=await lock(join(directory,'launcher.lock'));
-  let child,stopping=false,ready=false,healthAt=0,observedAt=0,restartAt=0,backoff=1000,transition=false,serial=Promise.resolve();
+  let child,stopping=false,ready=false,healthAt=0,observedAt=0,childBornAt=0,restartAt=0,backoff=1000,transition=false,serial=Promise.resolve();
   const queue=task=>{serial=serial.then(task).catch(async()=>{await write(join(directory,'launcher-error.json'),{event:'launcher_operation_failed',at:Date.now()}).catch(()=>{});});};
   await mkdir(join(directory,'logs'),{recursive:true,mode:0o700});
   let logWrites=Promise.resolve();
@@ -58,7 +58,7 @@ export async function runLauncher(directory) {
   const orphan=await read(join(directory,'children.json')).catch(()=>({children:[]}));
   for(const record of orphan.children??[])await killRecorded(record);
   const descendants=new Map();const saveChildren=()=>write(join(directory,'children.json'),{children:[...descendants].map(([pid,identity])=>({pid,identity}))});
-  const remember=async pid=>{const token=await identity(pid);if(token){descendants.set(pid,token);await saveChildren();}};
+  const remember=async pid=>{if(!alive(pid))return;const token=await identity(pid);if(token){descendants.set(pid,token);await saveChildren();}};
   const clearChildren=async()=>{for(const [pid,token] of descendants)await killRecorded({pid,identity:token});descendants.clear();await saveChildren();};
   const failCandidate=async()=>{
     if(pointer.pending){pointer.failed[pointer.pending.id]=Date.now()+pointer.pending.policy.failedVersionCooldown;pointer.active=pointer.lastKnownGood;pointer.pending=null;pointer.phase='idle';await savePointer();}
@@ -84,8 +84,10 @@ export async function runLauncher(directory) {
     const p=fork(version.entry,['run','--config',launch.configPath],{execPath:launch.node,execArgv:[],env:{...process.env,PATH:launch.path??process.env.PATH,FORGECREW_DATA_DIR:directory,FORGECREW_STABILIZING:candidate?'1':'0',FORGECREW_VERSION:version.version,FORGECREW_VERSION_ID:selected},stdio:['ignore','pipe','pipe','ipc'],detached:process.platform!=='win32',windowsHide:true});child=p;
     if(p.pid)queue(()=>remember(p.pid));
     capture(p.stdout);capture(p.stderr);
-    const bornAt=Date.now();
-    p.on('message',message=>queue(async()=>{
+    const bornAt=Date.now();childBornAt=bornAt;
+    p.on('message',message=>{
+      if(p===child&&message?.protocolVersion===1&&message.type==='HEALTH'){healthAt=Date.now();return;}
+      queue(async()=>{
       if(p!==child||message?.protocolVersion!==1)return;
       if(message.type==='CHILD_SPAWN'&&Number.isSafeInteger(message.pid)&&message.pid>0){await remember(message.pid);}
       if(message.type==='CHILD_EXIT'){descendants.delete(message.pid);await saveChildren();}
@@ -106,7 +108,8 @@ export async function runLauncher(directory) {
       if(message.type==='SWITCH'&&pointer.pending?.id===message.id&&pointer.phase==='staged'){
         pointer.phase='switching';await savePointer();transition=true;await stopChild();transition=false;restartAt=0;
       }
-    }));
+      });
+    });
     p.once('error',()=>{queue(()=>log('worker_spawn_failed'));});
     p.once('close',()=>queue(async()=>{
       if(child!==p)return;child=undefined;await clearChildren();
@@ -118,14 +121,14 @@ export async function runLauncher(directory) {
     }));
   };
   const stop=()=>{stopping=true;};process.once('SIGINT',stop);process.once('SIGTERM',stop);
+  const healthTimer=setInterval(()=>{if(child?.connected&&ready&&!transition&&!stopping)child.send({type:'HEALTH',protocolVersion:1});},1000);
   try {
     await log('starting');
     while(!stopping&&await desired()) {
       await serial;
       if(!child&&Date.now()>=restartAt)await startChild();
       if(child){
-        if(Date.now()-healthAt>30000){queue(async()=>{transition=true;await stopChild();transition=false;await failCandidate();restartAt=Date.now()+backoff;backoff=Math.min(backoff*2,30000);});}
-        else if(child.connected)child.send({type:'HEALTH',protocolVersion:1});
+        if(!ready&&Date.now()-childBornAt>30000||ready&&Date.now()-healthAt>30000){queue(async()=>{transition=true;await stopChild();transition=false;await failCandidate();restartAt=Date.now()+backoff;backoff=Math.min(backoff*2,30000);});}
         if(ready&&pointer.phase==='observing'&&Date.now()-observedAt>=pointer.pending.policy.stabilizationWindow){
           pointer.active=pointer.pending.id;pointer.lastKnownGood=pointer.active;pointer.pending=null;pointer.phase='idle';await savePointer();
           child.send({type:'ACTIVATE',protocolVersion:1});await log('running');
@@ -134,7 +137,7 @@ export async function runLauncher(directory) {
       await delay(250);
     }
   }finally{
-    stopping=true;await serial;await stopChild();await logWrites;await log('stopped');await release();process.removeListener('SIGINT',stop);process.removeListener('SIGTERM',stop);
+    stopping=true;clearInterval(healthTimer);await serial;await stopChild();await logWrites;await log('stopped');await release();process.removeListener('SIGINT',stop);process.removeListener('SIGTERM',stop);
   }
 }
 if(process.argv[1]&&resolve(process.argv[1])===fileURLToPath(import.meta.url))runLauncher(resolve(process.argv[2]??'.')).catch(()=>{console.error('ForgeCrew Launcher failed. Inspect local status and configuration.');process.exitCode=1;});

@@ -115,4 +115,27 @@ describe('authenticated HTTP contract',() => {
     const res=await app.request('/v1/register',{method:'POST',headers:{Authorization:'Bearer '+'r'.repeat(48),'Content-Type':'application/json'},body:JSON.stringify({secret:'do-not-echo'})});
     expect(res.status).toBe(400);expect(await res.text()).not.toContain('do-not-echo');
   });
+  it('reports correlated session and lease metadata without returning prompts or authentication secrets',async()=>{
+    const {s,w,c,token}=setup(),app=createApp(s,new ConfigManager(configSource),'r'.repeat(48));const claim=s.claim(w.id,c)!;
+    const response=await app.request('/v1/status',{headers:{'X-ForgeCrew-Worker':w.id,Authorization:'Bearer '+token}}),body=await response.json();
+    expect(response.status).toBe(200);expect(body.sessions[0].attempt.id).toBe(claim.attemptId);expect(body.sessions[0].turn.configRevision).toBe(claim.runConfig.configRevision);
+    const text=JSON.stringify(body);expect(text).not.toContain(token);expect(text).not.toContain('implement request');expect(text).not.toContain(c.agent.instructions);expect(text).not.toContain('run_config');
+  });
+  it('holds a work poll while health requests remain available and returns newly queued input',async()=>{
+    const {s,w,c,token,id}=setup();const first=s.claim(w.id,c)!;s.cancel(first.attemptId,w.id,first.generation);
+    let entered!:()=>void;const waiting=new Promise<void>(r=>{entered=r;}),claim=s.claim.bind(s);
+    s.claim=(...args)=>{const result=claim(...args);entered();return result;};
+    const app=createApp(s,new ConfigManager(configSource),'r'.repeat(48)),headers={'X-ForgeCrew-Worker':w.id,Authorization:'Bearer '+token};
+    const pending=app.request('/v1/claim?wait=1',{method:'POST',headers});await waiting;
+    expect((await app.request('/health/live')).status).toBe(200);s.enqueue(id,'comment','new','queued during poll','author',1000001);
+    expect((await(await pending).json()).claim.input.body).toBe('queued during poll');
+  });
+  it('releases a cancelled work poll without retaining an HTTP waiter',async()=>{
+    const {s,w,c,token}=setup();const first=s.claim(w.id,c)!;s.cancel(first.attemptId,w.id,first.generation);
+    let entered!:()=>void;const waiting=new Promise<void>(r=>{entered=r;}),claim=s.claim.bind(s);s.claim=(...args)=>{const result=claim(...args);entered();return result;};
+    const controller=new AbortController(),app=createApp(s,new ConfigManager(configSource),'r'.repeat(48));
+    const pending=app.request('/v1/claim?wait=1',{method:'POST',headers:{'X-ForgeCrew-Worker':w.id,Authorization:'Bearer '+token},signal:controller.signal});await waiting;controller.abort();
+    expect((await(await pending).json()).claim).toBeNull();
+  });
+
 });

@@ -267,6 +267,27 @@ export class Store {
       this.sqlite.prepare('UPDATE turns SET status=? WHERE id=?').run(stopped ? 'cancelled' : 'recovering',a.turn_id);
     }
   }
+  status(worker:string) {
+    const row=this.sqlite.prepare('SELECT capabilities,seen_at FROM workers WHERE id=?').get(worker) as {capabilities:string;seen_at:number}|undefined;
+    if(!row)throw new ContractError('unknown_worker',403);
+    const capabilities=JSON.parse(row.capabilities) as WorkerCapabilities;
+    const repositories=capabilities.repositories.map(r=>r.toLowerCase());
+    const sessions=(this.sqlite.prepare('SELECT * FROM sessions ORDER BY repository,number').all() as Session[]).filter(s=>repositories.includes(s.repository.toLowerCase())||s.previous_worker===worker).map(session=>{
+      const turn=this.sqlite.prepare('SELECT * FROM turns WHERE session_id=? ORDER BY rowid DESC LIMIT 1').get(session.id) as Turn|undefined;
+      const run=turn?.run_config?JSON.parse(turn.run_config) as RunConfig:undefined;
+      const attempt=turn?this.sqlite.prepare('SELECT id,worker_id,generation,status,lease_until FROM attempts WHERE turn_id=? ORDER BY generation DESC LIMIT 1').get(turn.id):undefined;
+      const deliveries=this.sqlite.prepare("SELECT id,status,worker_id,github_id,claim_until FROM deliveries WHERE session_id=? AND status!='posted' ORDER BY rowid").all(session.id);
+      return {id:session.id,repository:session.repository,kind:session.kind,number:session.number,...this.sessionStatus(session),blockedReason:session.blocked_reason,
+        turn:turn?{id:turn.id,status:turn.status,generation:turn.generation,model:run?.model,effort:run?.effort,configRevision:run?.configRevision,runConfigRevision:run?.runConfigRevision}:null,attempt:attempt??null,deliveries};
+    });
+    return {protocolVersion:1,worker:{...capabilities,seenAt:row.seen_at},sessions};
+  }
+  hasDelivery(worker:string):boolean {
+    const row=this.sqlite.prepare('SELECT capabilities FROM workers WHERE id=?').get(worker) as {capabilities:string}|undefined;
+    if(!row)return false;const repositories=(JSON.parse(row.capabilities) as WorkerCapabilities).repositories.map(r=>r.toLowerCase());
+    const pending=this.sqlite.prepare("SELECT s.repository FROM deliveries d JOIN sessions s ON s.id=d.session_id WHERE d.status!='posted' AND (d.claim_until IS NULL OR d.claim_until<=?)").all(this.now()) as {repository:string}[];
+    return pending.some(d=>repositories.includes(d.repository.toLowerCase()));
+  }
   claimDelivery(worker: string, ttl: number) {
     return this.sqlite.transaction(() => {
       const c = this.sqlite.prepare('SELECT capabilities FROM workers WHERE id=?').get(worker) as { capabilities: string } | undefined;

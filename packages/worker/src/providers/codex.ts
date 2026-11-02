@@ -1,3 +1,4 @@
+import { workerVersion } from '../version.ts';
 import { RpcClient } from '../rpc.ts';
 import type { RpcNotification } from '../rpc.ts';
 import { command, spawnProcess } from '../process.ts';
@@ -21,7 +22,7 @@ export class CodexProvider implements Provider {
     return new RpcClient(spawnProcess(this.executable,['-c','approvals_reviewer="auto_review"','-c','approval_policy="on-request"','app-server'],cwd));
   }
   private async initialize(rpc:RpcClient) {
-    await rpc.request('initialize',{clientInfo:{name:'forgecrew',version:'0.1.0'},capabilities:{experimentalApi:true}});rpc.notify('initialized');
+    await rpc.request('initialize',{clientInfo:{name:'forgecrew',version:workerVersion},capabilities:{experimentalApi:true}});rpc.notify('initialized');
     const account=await rpc.request<{account:{type:string}|null}>('account/read',{refreshToken:false});
     if(!account.account||!['chatgpt','chatgptAuthTokens'].includes(account.account.type))throw new Error('codex_subscription_login_required');
   }
@@ -94,7 +95,7 @@ export class CodexProvider implements Provider {
       result,
       interrupt,
       steer:async(text,controlId)=>{await start;if(!threadId||!turnId||settled)throw new Error('no_active_turn');await rpc.request('turn/steer',{threadId,expectedTurnId:turnId,clientUserMessageId:controlId,input:[{type:'text',text,text_elements:[]}]});},
-      close:async()=>{request.signal.removeEventListener('abort',aborted);rpc.off('notification',handle);await rpc.close();},
+      close:async()=>{request.signal.removeEventListener('abort',aborted);rpc.off('notification',handle);await rpc.close();await start;},
     };
   }
 }

@@ -5,6 +5,7 @@ import { command } from './process.ts';
 import { atomicWrite } from './local.ts';
 import { canWrite } from '../../shared/src/input.ts';
 import { hash } from '../../shared/src/hash.ts';
+import type { Result } from '../../shared/src/types.ts';
 import type { DeliveryClaim, WorkClaim, WorkSession } from '../../shared/src/protocol.ts';
 
 export type GitHubComment={id:number;body:string;user:{id:number;login:string}};
@@ -67,6 +68,22 @@ export class GhClient {
       if(checkout.code!==0)throw new Error('pull_checkout_failed');
     }
     await rename(staging,destination);return destination;
+  }
+  async verifyOutput(claim:WorkClaim,result:Result,startedAt:number,signal?:AbortSignal):Promise<number[]> {
+    const links=[...(result.links??[]),...(result.text.match(/https:\/\/[^\s<>()]+/g)??[])];
+    const numbers=new Set<number>(),prefix='/'+claim.session.repository.toLowerCase()+'/pull/';
+    for(const link of links.slice(0,20)){
+      try{const url=new URL(link.replace(/[.,;:!?]+$/,''));if(url.protocol!=='https:'||url.host.toLowerCase()!==this.hostname.toLowerCase()||url.username||url.password||!url.pathname.toLowerCase().startsWith(prefix))continue;
+        const tail=url.pathname.slice(prefix.length);if(/^\d+$/.test(tail))numbers.add(Number(tail));
+      }catch{/* Non-URL answer text is not an observed write. */}
+    }
+    if(!numbers.size)return [];
+    const account=await this.account(signal),missing:number[]=[];
+    for(const number of numbers){
+      const pull=await this.api<{body:string|null;created_at:string;user:{id:number}}>(`repos/${claim.session.repository}/pulls/${number}`,'GET',undefined,signal);
+      if(pull.user.id===account.id&&Date.parse(pull.created_at)>=Math.floor(startedAt/1000)*1000&&!pull.body?.includes(claim.runConfig.payload.output.attribution.trim()))missing.push(number);
+    }
+    return missing;
   }
   async findDelivery(delivery:DeliveryClaim,signal?:AbortSignal):Promise<GitHubComment|undefined> {
     return (await this.comments(delivery.session,signal)).find(comment=>delivery.authors.includes(String(comment.user.id))&&hash(comment.body)===delivery.body_hash&&comment.body.includes(`<!-- forgecrew:delivery=${delivery.id} -->`));

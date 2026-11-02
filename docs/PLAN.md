@@ -4,7 +4,7 @@
 
 - 단계: **P1–P5 구현 진행 중. Worker 실행·게시·Launcher 전환 경로의 로컬 통합 검증 완료**.
 - shared·dispatcher·worker 패키지에 중앙 YAML·SQLite·HTTP·활성화 구간·PR 리뷰·전체 재동기화 폴링과 두 Provider 어댑터를 구현했다. Worker의 setup/run/doctor, 독립 Heartbeat·Lease 감시, 격리 clone, 세션 재개, 완료 저널·게시 재조정, stop·steer를 연결했다. 실행 직전 중앙 권한·원본 댓글 검증과 시스템 라벨 동기화도 구현했다.
-- `npm run check`: TypeScript 검사, Vitest 112개 테스트, tsdown 기반 세 패키지 JS 빌드, 빌드된 CLI·Dispatcher 프로세스 기동·SQLite·HTTP 인증·설정 재로드 smoke 검사를 통과했다. 로컬 검증 환경은 Linux / Node.js 24.22.1이다. Provider 프로세스와 GitHub 통합 Fixture를 실제 구독 실행과 구별한다. 사내 계정·실제 구독 모델 Turn·Windows 실제 사용자 환경·실제 사내 npm 업데이트·로그인 자동 시작 시험은 수행하지 않았다. Launcher 자식 프로세스 전환·롤백·중복 기동·종료, drain·패키지 격리 설치와 loopback npm 레지스트리의 실제 tarball 다운로드·자동 전환·불량 버전 rollback·ID/저널/작업 파일 보존을 로컬 시험으로 확인했다.
+- `npm run check`: TypeScript 검사, Vitest 119개 테스트, tsdown 기반 세 패키지 JS 빌드, 빌드된 CLI·Dispatcher 프로세스 기동·SQLite·HTTP 인증·설정 재로드 smoke 검사를 통과했다. 로컬 검증 환경은 Linux / Node.js 24.22.1이다. Provider 프로세스와 GitHub 통합 Fixture를 실제 구독 실행과 구별한다. 사내 계정·실제 구독 모델 Turn·Windows 실제 사용자 환경·실제 사내 npm 업데이트·로그인 자동 시작 시험은 수행하지 않았다. Launcher 자식 프로세스 전환·롤백·중복 기동·종료, drain·패키지 격리 설치와 loopback npm 레지스트리의 실제 tarball 다운로드·자동 전환·불량 버전 rollback·ID/저널/작업 파일 보존을 로컬 시험으로 확인했다.
 - Linux/Windows GitHub Actions 검사와 Dispatcher Dockerfile을 추가했다. 코드 `4ddc3c8`의 [CI 41451169932](https://github.com/neuwcodebox/forgecrew/actions/runs/41451169932)에서 Linux/Windows의 90개 테스트·빌드·배포 패키지 smoke와 Docker 검사가 모두 통과했다. Docker 검사는 비루트/읽기 전용 실행·원자적 YAML 교체·SQLite 재시작·정지 볼륨 백업/복원을 포함한다.
 - 제품 정책과 배포 구조는 [SPEC](SPEC.md), 구체적인 동작 계약은 [TECH](TECH.md)를 기준으로 한다.
 - 외부 환경에서 제공할 값은 GHES 호스트·테스트 저장소·PAT, Dispatcher 주소, 사내 npm 레지스트리·scope다. Worker는 기존 `gh` 및 Codex/Claude 구독 로그인을 사용한다.
@@ -70,7 +70,7 @@
 
 - [x] Worker ID·플랫폼 인증·로컬 GitHub 접근 저장소·모델 목록 보고를 연결하고 등록·배정 계약을 검증했다.
 - [x] 숫자 버전·최신 모델·접근·effort·Auto Review·슬롯 배정을 시험했다. 최신 모델 보유 Worker가 바쁠 때 구버전으로 낮추지 않는다.
-- [x] 원자적 Claim·Lease·generation과 실행/설정 조회에 독립적인 Heartbeat·갱신·제어 처리를 구현했다. 현재 제어 전송은 Heartbeat 응답을 사용한다.
+- [x] 원자적 Claim·Lease·generation과 실행/설정 조회에 독립적인 Heartbeat·갱신·제어 처리를 구현했다. 작업 수신은 취소 가능한 long polling이며 제어 전송은 독립적인 Heartbeat 응답을 사용한다.
 - [x] 세션별 실행을 분리하고 같은 브랜치의 독립 clone 두 개로 dirty 파일·미추적 파일·Git 사용자/서명 설정 보존을 로컬 Git 시험에서 확인했다. 사내 gh clone은 미검증이다.
 - [ ] 네트워크 단절·Dispatcher 재시작·Provider 종료·Worker 충돌·PC 절전/복귀를 구별한다.
 - [ ] Lease 만료 전 중단·자식 프로세스 정리와 재배정 유예 관계를 실제 Windows/Linux에서 시험한다.
@@ -149,7 +149,7 @@
 
 ## 통합 검증 시나리오
 
-아래 표는 전체 제품 수용 시험이다. 현재 `tests/`의 112개 시험과 `scripts/smoke.mjs`는 설정·모델 선택·상태 전이·HTTP·기본 폴링·Provider 프로세스·Worker 실행/제어/게시·빌드 산출물 기동의 계약을 검증한다. 이 통과를 사내 GitHub·실제 구독 런타임·Windows 실제 사용자 환경·무인 업데이트의 종단간 시험 통과로 취급하지 않는다.
+아래 표는 전체 제품 수용 시험이다. 현재 `tests/`의 119개 시험과 `scripts/smoke.mjs`는 설정·모델 선택·상태 전이·HTTP·기본 폴링·Provider 프로세스·Worker 실행/제어/게시·빌드 산출물 기동의 계약을 검증한다. 이 통과를 사내 GitHub·실제 구독 런타임·Windows 실제 사용자 환경·무인 업데이트의 종단간 시험 통과로 취급하지 않는다.
 
 | ID | 시나리오 | 기대 결과 | 요구·단계 |
 |---|---|---|---|

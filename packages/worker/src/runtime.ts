@@ -1,6 +1,7 @@
 import { readFile, readdir, rename, mkdir, unlink } from 'node:fs/promises';
 import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
+import { workerVersion } from './version.ts';
 import type { LocalConfig } from './local.ts';
 import { atomicWrite, cacheProjection, LeaseClock, writeResult, readLatestProjection } from './local.ts';
 import { DispatcherClient, DispatcherError } from './client.ts';
@@ -15,9 +16,9 @@ import { validateRunConfig } from '../../shared/src/protocol.ts';
 import { validateProjection } from '../../shared/src/config.ts';
 import type { Projection } from '../../shared/src/config.ts';
 
-type Active={claim:WorkClaim;clock:LeaseClock;controller:AbortController;run?:ProviderRun;task:Promise<void>;reason?:'stop'|'shutdown'|'lease_lost'|'steer'|'refresh'|'provider_blocked'|'github_blocked';};
+type Active={claim:WorkClaim;clock:LeaseClock;controller:AbortController;startedAt:number;run?:ProviderRun;task:Promise<void>;reason?:'stop'|'shutdown'|'lease_lost'|'steer'|'refresh'|'provider_blocked'|'github_blocked';};
 type Heartbeat={configRevision:string;controls:{id:string;attemptId:string;control:Control}[]};
-type Dependencies={client?:DispatcherClient;github?:GhClient;providers?:Partial<Record<Engine,Provider>>};
+type Dependencies={client?:DispatcherClient;github?:GhClient;providers?:Partial<Record<Engine,Provider>>;logger?:(record:Record<string,unknown>)=>void};
 const code=(error:unknown)=>error instanceof Error&&/^[a-z_]+$/.test(error.message)?error.message:'worker_operation_failed';
 
 export class WorkerRuntime {
@@ -27,6 +28,7 @@ export class WorkerRuntime {
   readonly github:GhClient;
   readonly providers:Partial<Record<Engine,Provider>>;
   readonly active=new Map<string,Active>();
+  private readonly writeLog:(record:Record<string,unknown>)=>void;
   private controlTasks=new Map<string,Promise<void>>();
   private capabilities:WorkerCapabilities|undefined;
   private projection:Projection|undefined;
@@ -37,6 +39,7 @@ export class WorkerRuntime {
   private flushing:Promise<void>|undefined;
   private delivery:{claim:DeliveryClaim;clock:LeaseClock;controller:AbortController;interruptGrace:number}|undefined;
   constructor(config:LocalConfig,directory:string,dependencies:Dependencies={}) {
+    this.writeLog=dependencies.logger??(record=>console.log(JSON.stringify(record)));
     this.config=config;this.directory=directory;this.client=dependencies.client??new DispatcherClient(config);
     this.github=dependencies.github??new GhClient(config.hostname);
     this.providers=dependencies.providers??{
@@ -44,10 +47,10 @@ export class WorkerRuntime {
       ...(config.engines.claude?{claude:new ClaudeProvider(config.engines.claude)}:{}),
     };
   }
-  private log(event:string,reason?:string) {console.log(JSON.stringify({event,workerId:this.config.id,...(reason?{reason}:{})}));}
+  private log(event:string,reason?:string,details:Record<string,unknown>={}) {this.writeLog({event,workerId:this.config.id,...(reason?{reason}:{}),...details});}
   async initialize(registrationToken?:string) {
     const account=await this.github.account();
-    this.capabilities={id:this.config.id,githubLogin:account.login,githubId:String(account.id),version:process.env.FORGECREW_VERSION??'0.1.0',schemaVersions:[1],maxConcurrentSessions:this.config.maxConcurrentSessions,repositories:[],models:[],draining:false};
+    this.capabilities={id:this.config.id,githubLogin:account.login,githubId:String(account.id),version:workerVersion,schemaVersions:[1],maxConcurrentSessions:this.config.maxConcurrentSessions,repositories:[],models:[],draining:false};
     let connected:Heartbeat;
     try {connected=await this.client.request<Heartbeat>('/v1/heartbeat',this.capabilities);}
     catch(error) {
@@ -64,7 +67,7 @@ export class WorkerRuntime {
     if(this.projection?.configRevision===revision)return;
     const p=await this.client.request<Projection>('/v1/config/'+revision,undefined,{method:'GET'});validateProjection(p);
     if(p.configRevision!==revision||p.payload.github.hostname!==this.config.hostname)throw new Error('worker_config_host_mismatch');
-    await cacheProjection(this.directory,p);this.projection=p;
+    await cacheProjection(this.directory,p);this.projection=p;this.client.requestTimeout=p.payload.runtime.requestTimeout;
   }
   async refreshCapabilities() {
     if(!this.projection||!this.capabilities)return;
@@ -84,9 +87,11 @@ export class WorkerRuntime {
   async heartbeat() {
     if(!this.capabilities)throw new Error('worker_not_initialized');
     this.capabilities.draining=this.draining||this.stabilizing;
+    if(this.projection)this.capabilities.configRevision=this.projection.configRevision;
     const response=await this.client.request<Heartbeat>('/v1/heartbeat',this.capabilities);
     // Lease renewal remains independent of model discovery, Git operations and new-config downloads.
     await Promise.all([...this.active.values()].map(async active=>{
+      if(active.reason)return;
       const wall=Date.now(),mono=performance.now();
       try {
         const lease=await this.client.request<{leaseDuration:number;interruptGrace:number}>('/v1/renew',{attemptId:active.claim.attemptId,generation:active.claim.generation});
@@ -138,9 +143,11 @@ export class WorkerRuntime {
     if(this.active.size>=this.config.maxConcurrentSessions||this.active.has(claim.attemptId))throw new Error('worker_capacity_exceeded');
     if(!this.providers[claim.runConfig.engine])throw new Error('provider_disabled');
     const clock=new LeaseClock();clock.renew(sentWall,sentMono,{duration:claim.leaseDuration,interruptGrace:claim.interruptGrace});
-    const active:Active={claim,clock,controller:new AbortController(),task:Promise.resolve()};
+    const active:Active={claim,clock,startedAt:Date.now(),controller:new AbortController(),task:Promise.resolve()};
     this.active.set(claim.attemptId,active);
-    active.task=this.execute(active).catch(error=>this.log('attempt_failed',code(error))).finally(()=>this.active.delete(claim.attemptId));
+    const trace={attemptId:claim.attemptId,turnId:claim.turnId,sessionId:claim.session.id,generation:claim.generation,model:claim.runConfig.model,effort:claim.runConfig.effort,configRevision:claim.runConfig.configRevision,runConfigRevision:claim.runConfig.runConfigRevision};
+    this.log('attempt_started',undefined,trace);
+    active.task=this.execute(active).catch(error=>this.log('attempt_failed',code(error),trace)).finally(()=>{this.active.delete(claim.attemptId);this.log('attempt_closed',active.reason,trace);});
     return active.task;
   }
   private async execute(active:Active) {
@@ -180,6 +187,9 @@ export class WorkerRuntime {
     if(result) {
       await writeResult(this.directory,claim.attemptId,{generation:claim.generation,result});
       await this.flushResults();
+      if(result.kind!=='failed')try{
+        for(const pullNumber of await this.github.verifyOutput(claim,result,active.startedAt,active.controller.signal))this.log('output_attribution_missing',undefined,{attemptId:claim.attemptId,sessionId:claim.session.id,pullNumber});
+      }catch(error){this.log('output_verification_unavailable',code(error),{attemptId:claim.attemptId,sessionId:claim.session.id});}
     }
   }
   flushResults():Promise<void> {
@@ -201,7 +211,7 @@ export class WorkerRuntime {
       }
     }
   }
-  async work(signal?:AbortSignal) {
+  async work(signal?:AbortSignal,longPoll=false) {
     if(!this.projection||this.stabilizing||signal?.aborted)return;
     await this.flushResults();
     const sentWall=Date.now(),sentMono=performance.now();
@@ -214,7 +224,7 @@ export class WorkerRuntime {
       finally{this.delivery=undefined;}
     }
     while(this.active.size<this.config.maxConcurrentSessions&&!this.draining&&!this.stabilizing&&!signal?.aborted) {
-      const wall=Date.now(),mono=performance.now();const {claim}=await this.client.request<{claim:WorkClaim|null}>('/v1/claim');
+      const wall=Date.now(),mono=performance.now();const {claim}=await this.client.request<{claim:WorkClaim|null}>('/v1/claim'+(longPoll?'?wait=1':''),undefined,signal?{signal}:{});
       if(!claim)break;
       if(this.draining||this.stabilizing||signal?.aborted){await this.client.request('/v1/release',{attemptId:claim.attemptId,generation:claim.generation});break;}
       this.start(claim,wall,mono);
@@ -253,7 +263,7 @@ export class WorkerRuntime {
     await Promise.all([
       loop(async()=>{if(this.projection&&!this.stabilizing&&!this.draining)await this.updateCheck?.(this.projection,signal);},()=>this.projection?.payload.updates.checkInterval??60000),
       loop(()=>this.heartbeat(),()=>this.projection?.payload.runtime.heartbeatInterval??15000),
-      loop(()=>this.work(signal),()=>this.projection?.payload.runtime.reconnect.initialDelay??1000),
+      loop(()=>this.work(signal,true),()=>this.projection?.payload.runtime.reconnect.initialDelay??1000),
       loop(()=>this.checkLeases(),()=>250),
       loop(async()=>{if(this.projection&&Date.now()-this.catalogAt>=this.projection.payload.runtime.modelCatalogRefreshInterval)await this.refreshCapabilities();},()=>this.projection?.payload.runtime.configCheckInterval??30000),
     ]);
