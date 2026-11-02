@@ -56,7 +56,7 @@ runtime:
 
 updates:
   registry: "https://npm.example.internal/"
-  package: "@department/forgecrew"
+  package: "@forgecrew/worker"
   channel: latest
   checkInterval: 15m
   drainTimeout: 10m

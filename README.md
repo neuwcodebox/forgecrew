@@ -47,6 +47,30 @@ Worker는 해당 PC의 `gh`·Git·선택한 AI 실행 파일과 기존 로그인
 
 Worker는 중앙 `updates` 설정의 registry·package·channel을 조회해 정확한 버전을 별도 경로에 설치합니다. 설치 스크립트를 실행하지 않으며 npm lock 무결성·Node·Launcher/상태 계약을 확인합니다. 준비가 끝나면 새 작업을 멈추고 현재 Turn을 정리해 전환합니다. 로컬 READY와 안정화 관찰을 통과하면 승격하고, 기동 실패에는 이전 버전으로 복귀해 실패 버전의 재시도를 유예합니다. Dispatcher 접속 실패만으로 정상 버전을 롤백하지 않습니다. 실제 사내 npm 패키지 게시·업데이트 시험은 남아 있습니다.
 
+## 사내 npm 배포와 최초 설치
+
+기본 Worker 패키지명은 `@forgecrew/worker`입니다. 사내 registry 주소를 `updates.registry`에 넣고 `updates.package`·`updates.channel`을 실제 게시 이름·dist-tag와 맞춥니다. scope를 변경할 때는 `packages/worker/package.json`의 이름도 함께 변경합니다. 인증은 사내 npm의 사용자 설정으로 준비합니다.
+
+게시할 버전을 올린 뒤 저장소 루트에서 검사·빌드하고 해당 registry에 게시합니다. 아래 registry 주소는 운영 환경 값으로 바꿉니다.
+
+```bash
+npm version patch --workspace packages/worker --no-git-tag-version
+npm run check
+npm publish --workspace packages/worker --registry https://npm.example.internal/ --tag latest --ignore-scripts
+```
+
+각 PC에서 같은 사용자 계정의 Node.js 24 LTS·Git·gh·선택 엔진과 기존 구독 로그인을 준비한 뒤 최초 설치합니다.
+
+```bash
+npm install --global @forgecrew/worker --registry https://npm.example.internal/ --@forgecrew:registry=https://npm.example.internal/
+forgecrew setup --dispatcher https://dispatcher.example.internal --hostname github.example.internal --engine codex
+forgecrew doctor
+forgecrew start
+forgecrew status
+```
+
+최초 setup에는 앞서 설명한 `FORGECREW_REGISTRATION_TOKEN`이 필요합니다. 이후 릴리스는 새로운 정확한 버전을 같은 channel에 게시하면 실행 중 Worker가 감지합니다. 코드·프로토콜·상태 schema가 호환되는 완성된 패키지만 전환 후보가 됩니다. 실제 사내 주소·인증·게시와 OS 로그인 수용 시험은 해당 환경에서 수행합니다.
+
 ## Dispatcher Docker 운영
 
 이미지에는 설정 파일과 비밀값을 넣지 않습니다. 설정 디렉터리를 `/config`에 읽기 전용으로, 데이터 볼륨을 `/data`에 마운트합니다. 호스트에서 YAML 파일을 원자적으로 교체하는 편집기도 지원하도록 **파일 하나가 아닌 디렉터리**를 마운트하세요. 컨테이너의 `node` 사용자(UID 1000)가 설정 파일을 읽을 수 있어야 합니다.
