@@ -20,3 +20,9 @@ STAGE_READY를 포인터에 기록한 뒤 ACK한다. Worker는 새 Claim을 중�
 - 실제 `npm pack` 산출물을 개발 의존성 없는 별도 prefix에 설치해 CLI·Launcher·로컬 READY·graceful stop을 시험했다. gh를 로컬 실패 Fixture로 바꿔 외부 계정이나 모델을 사용하지 않았다.
 
 실제 사내 registry 게시·인증·실행 중 새 릴리스 감지, Windows/Linux 로그인/로그아웃·절전·자식 프로세스 트리 종료, 실제 구독 모델·Auto Review·GHES 대화는 별도 운영 수용 시험으로 남아 있다. 어댑터/Fixture 통과를 해당 시험의 완료로 표시하지 않는다.
+
+## CI와 컨테이너 검증
+
+Docker job [41450448870](https://github.com/neuwcodebox/forgecrew/actions/runs/41450448870)은 production 이미지의 native SQLite 로딩, 비루트·읽기 전용 실행, SIGTERM 종료·재시작, 다른 볼륨으로 복사한 SQLite 상태에서 Worker 인증 복구를 통과했다. 테스트 컨테이너는 `--network none`을 사용해 사내 GitHub나 외부 서비스에 접근하지 않는다. 설정의 원자적 파일 교체는 파일 대신 상위 디렉터리를 마운트하는 방식으로 유지한다.
+
+Windows Launcher 전환 시험에서 native 프로세스 식별 검사 때문에 기본 Vitest 5초 한도를 초과했다. 상태·이벤트 조건 검증은 유지하고 해당 suite의 실패 한도를 20초로 조정했다. 고정 대기 시간으로 성공을 판단하지 않는다.

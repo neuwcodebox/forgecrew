@@ -5,7 +5,7 @@
 - 단계: **P1–P5 구현 진행 중. Worker 실행·게시·Launcher 전환 경로의 로컬 통합 검증 완료**.
 - shared·dispatcher·worker 패키지에 중앙 YAML·SQLite·HTTP·활성화 구간·PR 리뷰·전체 재동기화 폴링과 두 Provider 어댑터를 구현했다. Worker의 setup/run/doctor, 독립 Heartbeat·Lease 감시, 격리 clone, 세션 재개, 완료 저널·게시 재조정, stop·steer를 연결했다. 실행 직전 중앙 권한·원본 댓글 검증과 시스템 라벨 동기화도 구현했다.
 - `npm run check`: TypeScript 검사, Vitest 90개 테스트, tsdown 기반 세 패키지 JS 빌드, 빌드된 CLI·Dispatcher 프로세스 기동·SQLite·HTTP 인증·설정 재로드 smoke 검사를 통과했다. 로컬 검증 환경은 Linux / Node.js 24.22.1이다. Provider 프로세스와 GitHub 통합 Fixture를 실제 구독 실행과 구별한다. 사내 계정·실제 구독 모델 Turn·Windows 실제 사용자 환경·실제 사내 npm 업데이트·로그인 자동 시작 시험은 수행하지 않았다. Launcher 자식 프로세스 전환·롤백·중복 기동·종료, drain과 패키지 격리 설치는 로컬 시험으로 확인했다.
-- Linux/Windows GitHub Actions 검사와 Dispatcher Dockerfile을 추가했다. CI 실행 결과와 Docker 이미지 빌드·실행은 로컬 smoke 결과와 별도로 확인한다.
+- Linux/Windows GitHub Actions 검사와 Dispatcher Dockerfile을 추가했다. Linux/Windows CI는 로컬 검사와 별도로 확인한다. Docker 이미지 빌드·비루트/읽기 전용 실행·SQLite 재시작·정지 볼륨 백업/복원은 Linux CI에서 통과했다.
 - 제품 정책과 배포 구조는 [SPEC](SPEC.md), 구체적인 동작 계약은 [TECH](TECH.md)를 기준으로 한다.
 - 외부 환경에서 제공할 값은 GHES 호스트·테스트 저장소·PAT, Dispatcher 주소, 사내 npm 레지스트리·scope다. Worker는 기존 `gh` 및 Codex/Claude 구독 로그인을 사용한다.
 - 기존 개발 코드가 있다면 먼저 구조와 동작을 확인한다. 문서와 파일 배치가 다르다는 이유로 전체를 재작성하지 않는다.
@@ -45,14 +45,14 @@
 **상태:** 진행 중.
 
 - [ ] Docker Dispatcher와 영속 SQLite, migration·기본 health 경로를 구현한다.
-- [ ] 저장소·조회 종류별 증분 폴링, 페이지 순회, 중복 제거, 활성화 epoch와 최초 본문 처리를 연결한다.
-- [ ] 권한 검증, 모델/effort 라벨 해석, 충돌·미지원 설정의 보류를 구현한다.
-- [ ] Session/Input/Turn/Attempt를 구분하고 FIFO·stop·steer·질문 후 새 Turn 흐름을 연결한다.
+- [x] 저장소·조회 종류별 증분 폴링·전체 재동기화·페이지 순회·중복 제거·활성화 구간과 최초 본문을 구현하고 Fixture로 확인했다.
+- [x] 권한·모델/effort 라벨 해석·충돌 보류와 실행 직전 원본 확인을 구현하고 계약 시험을 통과했다.
+- [x] Session/Input/Turn/Attempt·FIFO·stop·steer·질문 후 새 Turn을 연결하고 저장소·Provider·Worker 통합 Fixture로 확인했다.
 - [x] Worker의 로컬 저널·완료 보고·Delivery 게시 경로를 연결하고 완료 ACK·게시 응답 유실을 통합 Fixture로 검증했다. 실제 `gh` 계정으로 게시하는 시험은 남아 있다.
-- [ ] 자동 댓글 표식과 사람의 직접 작성 댓글을 구분한다. 같은 계정이 질문과 답변 양쪽에 등장하는 시나리오를 시험한다.
+- [x] 계정·게시 ID·Delivery 표식·본문 hash로 자동 출력만 제외하며 동일 계정의 직접 작성 댓글은 입력으로 수집하는 시험을 통과했다.
 - [x] YAML 재로드·인증된 projection·캐시·실행 스냅샷 검증을 Worker에 연결했다. 새 지침을 다음 Turn에 전달하고 진행 중 스냅샷을 보존하는 통합 Fixture를 통과했다.
 - [ ] 중앙 공통 지침과 저장소 지침을 함께 적용하고 답변만 하는 요청도 정상 완료한다.
-- [ ] Worker 게시기의 AI/런타임 출처 표기·관리 블록·본문 고정·분할 게시를 구현한다. 표시 문구와 자동 출력 식별을 분리한다.
+- [x] AI/런타임 출처·본문 고정·Delivery별 표식·분할 게시를 구현하고 계약 시험을 통과했다. 표시 문구와 자동 출력 식별은 독립적이다.
 
 **완료 기준:** 독립 Issue/PR 세션에서 라벨과 일반 댓글만으로 실제 대화가 이어진다. 폴링 반복으로 같은 작업이 다시 실행되지 않는다. 질문을 남긴 Turn은 슬롯을 반환한다. 제어 명령은 정확한 Attempt에만 적용된다.
 
@@ -66,11 +66,11 @@
 
 **선행:** P2의 기본 대화·큐·게시 경로.
 
-**상태:** 예정.
+**상태:** 진행 중. 분산 배정·Lease·복구의 로컬 계약 구현, 실제 여러 PC 장애 시험 대기.
 
-- [ ] Worker 등록·ID·플랫폼 인증·GitHub 배정 조회·모델 목록 보고를 구현한다.
-- [ ] 숫자 버전 비교, 최신 모델 선택, 접근·effort·Auto Review·슬롯에 따른 배정을 시험한다.
-- [ ] 원자적 Claim·Lease·generation, Heartbeat와 제어 long polling의 독립 진행을 구현한다.
+- [x] Worker ID·플랫폼 인증·로컬 GitHub 접근 저장소·모델 목록 보고를 연결하고 등록·배정 계약을 검증했다.
+- [x] 숫자 버전·최신 모델·접근·effort·Auto Review·슬롯 배정을 시험했다. 최신 모델 보유 Worker가 바쁠 때 구버전으로 낮추지 않는다.
+- [x] 원자적 Claim·Lease·generation과 실행/설정 조회에 독립적인 Heartbeat·갱신·제어 처리를 구현했다. 현재 제어 전송은 Heartbeat 응답을 사용한다.
 - [ ] 세션별 프로세스·작업 공간을 분리하고 동일 브랜치가 필요한 경우 독립 clone 경로를 검증한다.
 - [ ] 네트워크 단절·Dispatcher 재시작·Provider 종료·Worker 충돌·PC 절전/복귀를 구별한다.
 - [ ] Lease 만료 전 중단·자식 프로세스 정리와 재배정 유예 관계를 실제 Windows/Linux에서 시험한다.
@@ -90,7 +90,7 @@
 
 **선행:** P1의 런타임 실증, P2–P3의 실행 경로.
 
-**상태:** 예정.
+**상태:** 진행 중. 두 Provider 프로세스 계약 구현, 실제 구독 실행·자동 검토 시험 대기.
 
 - [ ] Worker 엔진 단일 선택·동시 활성화와 엔진별 장애 격리를 완성한다.
 - [ ] 새 모델 발견·계열 변경·effort 변경·미지원 조합·사용량 제한·인증 만료를 처리한다.
@@ -121,7 +121,7 @@
 - [ ] npm/Dispatcher 불통, 설치 실패, 새 버전 실행 오류, 포인터 교체 중 충돌, 상태 schema 변경을 구별한다.
 - [ ] Worker ID·설정 캐시·로컬 인증·작업 공간·미게시 결과가 교체 전후 유지되는지 확인한다. 코드 롤백에서 이전 schema 캐시를 사용할 수 있는지 확인한다.
 - [ ] 중앙 YAML의 마운트 파일 교체·잘못된 수정·재시작 필요 항목·Secret 비노출을 시험하고 설정 적용 상태를 진단할 수 있게 한다.
-- [ ] Docker 이미지의 설정·데이터 볼륨·health·종료·SQLite 백업/복원을 실제 명령으로 문서화한다.
+- [x] Docker 설정 디렉터리·데이터 볼륨·health·종료·SQLite 백업/복원 명령을 README에 작성하고 격리된 Linux CI에서 이미지 실행·재시작·볼륨 복원을 검증했다.
 - [ ] 실제 패키지명·레지스트리·지원 Node/런타임 버전과 일치하는 설치 안내를 README에 작성한다.
 
 **완료 기준:** Windows/Linux에서 실행 중 새 버전을 게시하면 사용자 개입 없이 교체·재시작·재연결된다. 실패해도 실행 가능한 정상 버전과 복구 가능한 상태가 남는다. Dispatcher 장애 때문에 정상 버전을 잘못 롤백하지 않는다.

@@ -45,7 +45,42 @@ Worker는 해당 PC의 `gh`·Git·선택한 AI 실행 파일과 기존 로그인
 
 Worker는 중앙 `updates` 설정의 registry·package·channel을 조회해 정확한 버전을 별도 경로에 설치합니다. 설치 스크립트를 실행하지 않으며 npm lock 무결성·Node·Launcher/상태 계약을 확인합니다. 준비가 끝나면 새 작업을 멈추고 현재 Turn을 정리해 전환합니다. 로컬 READY와 안정화 관찰을 통과하면 승격하고, 기동 실패에는 이전 버전으로 복귀해 실패 버전의 재시도를 유예합니다. Dispatcher 접속 실패만으로 정상 버전을 롤백하지 않습니다. 실제 사내 npm 패키지 게시·업데이트 시험은 남아 있습니다.
 
-Dispatcher의 Dockerfile도 제공합니다. 이미지에는 설정 파일과 비밀값을 넣지 않습니다. `/config/config.yaml`을 읽기 전용으로, `/data`를 쓰기 가능한 영속 볼륨으로 마운트하세요. 기본 healthcheck 포트는 설정 예제와 같은 8080입니다. Docker 이미지 빌드·컨테이너 시험은 아직 수행하지 않았습니다.
+## Dispatcher Docker 운영
+
+이미지에는 설정 파일과 비밀값을 넣지 않습니다. 설정 디렉터리를 `/config`에 읽기 전용으로, 데이터 볼륨을 `/data`에 마운트합니다. 호스트에서 YAML 파일을 원자적으로 교체하는 편집기도 지원하도록 **파일 하나가 아닌 디렉터리**를 마운트하세요. 컨테이너의 `node` 사용자(UID 1000)가 설정 파일을 읽을 수 있어야 합니다.
+
+```bash
+mkdir -p deploy/config
+cp config.example.yaml deploy/config/config.yaml
+# 호스트·저장소를 수정하고 server.dataDir=/data, port=8080을 유지합니다.
+docker build -t forgecrew-dispatcher:local .
+docker volume create forgecrew-data
+docker run -d --name forgecrew --restart unless-stopped \
+  --read-only --tmpfs /tmp \
+  --env FORGECREW_GITHUB_PAT --env FORGECREW_REGISTRATION_TOKEN \
+  --mount type=bind,source="$PWD/deploy/config",target=/config,readonly \
+  --mount type=volume,source=forgecrew-data,target=/data \
+  -p 127.0.0.1:8080:8080 forgecrew-dispatcher:local
+```
+
+Worker가 접속할 HTTPS 주소는 역방향 프록시로 연결합니다. healthcheck는 컨테이너 내부 8080의 `/health/live`를 확인합니다. `/health/ready`는 현재 설정 revision과 재로드 오류를 표시합니다. 잘못된 YAML은 마지막 정상 설정을 유지합니다.
+
+SQLite 백업은 Dispatcher를 정지한 뒤 데이터 디렉터리 전체를 별도 볼륨으로 복사합니다. WAL/SHM 파일이 남아 있으면 함께 보존합니다.
+
+```bash
+docker stop --time 45 forgecrew
+docker volume create forgecrew-backup
+docker run --rm --network none --read-only --user node \
+  --mount type=volume,source=forgecrew-data,target=/backup,readonly \
+  --mount type=volume,source=forgecrew-backup,target=/data \
+  --entrypoint node forgecrew-dispatcher:local \
+  -e "require('node:fs').cpSync('/backup','/data',{recursive:true})"
+docker start forgecrew
+```
+
+백업마다 새 볼륨 이름을 사용합니다. 복원할 때는 Dispatcher를 정지하고 같은 복사 명령의 source를 백업 볼륨으로, target을 비어 있는 새 데이터 볼륨으로 바꾼 뒤 새 볼륨을 사용하는 컨테이너를 만듭니다. 설정 디렉터리와 비밀값도 같은 환경으로 연결합니다. 이미지 교체는 데이터 볼륨을 유지한 채 컨테이너를 다시 만듭니다.
+
+CI에서 Docker 이미지 빌드·비루트/읽기 전용 실행·SQLite 재시작·정지 볼륨 백업/복원을 검증합니다. 사내 네트워크와 운영 데이터 복구 시험은 별도로 수행해야 합니다.
 
 ## 사용 방식
 
