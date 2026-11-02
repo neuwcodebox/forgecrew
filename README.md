@@ -24,16 +24,11 @@ npm run dev:dispatcher
 
 `/health/live`, `/health/ready`에서 상태를 확인할 수 있습니다. 설정 파일은 주기적으로 다시 읽으며, 잘못된 변경은 마지막 정상 설정을 유지합니다. Worker용 `/v1/*` API는 Worker별 인증이 필요합니다. 최초 등록에는 등록용 비밀값을 사용하며, AI·GitHub 로그인 토큰을 등록 요청에 포함하지 않습니다.
 
-Worker 진단은 [worker.example.json](worker.example.json) 형식의 로컬 설정을 읽습니다. PC마다 새 UUID와 무작위 플랫폼 토큰을 생성해 `id`, `token`을 바꾸세요. GitHub나 AI의 로그인 토큰을 복사하지 않습니다. 사용할 엔진만 `engines`에 남깁니다.
-
-```bash
-node packages/worker/dist/cli.js doctor --config /path/to/worker.json
-```
-
-처음 연결할 때 등록용 비밀값을 `FORGECREW_REGISTRATION_TOKEN` 환경변수로 전달하고 setup을 실행합니다. `--engine`은 `codex`, `claude`, `both` 중에서 선택합니다. 재실행할 때 기존 ID·플랫폼 토큰을 유지합니다.
+처음 연결할 때 등록용 비밀값을 `FORGECREW_REGISTRATION_TOKEN` 환경변수로 전달하고 setup을 실행합니다. `--engine`은 `codex`, `claude`, `both` 중에서 선택합니다. setup이 PC별 UUID·무작위 플랫폼 토큰을 생성하고, 재실행할 때 기존 값을 유지합니다. 로컬 설정 형식은 [worker.example.json](worker.example.json)을 참고하세요. GitHub나 AI 로그인 토큰은 이 설정에 복사하지 않습니다.
 
 ```bash
 node packages/worker/dist/cli.js setup --dispatcher https://dispatcher.example.internal --hostname github.example.internal --engine codex
+node packages/worker/dist/cli.js doctor
 node packages/worker/dist/cli.js start
 node packages/worker/dist/cli.js status
 node packages/worker/dist/cli.js stop
