@@ -1,5 +1,13 @@
 # ForgeCrew — 개발 지침
 
+## 프로젝트 개요
+
+ForgeCrew는 GitHub Enterprise Server의 Issue·PR 대화를 단일 Dispatcher가 조율하고, Windows/Linux 동료 PC의 Worker가 기존 `gh`·Codex/Claude 로그인과 로컬 환경으로 수행하는 플랫폼이다. 공통 설정·AI 지침은 Dispatcher의 단일 YAML에서 관리한다. 구체적인 실행·권한·복구 계약은 SPEC과 TECH를 따른다.
+
+## 기술 스택
+
+TypeScript·Node.js LTS와 npm workspaces를 사용한다. Dispatcher는 Hono·Drizzle/SQLite·Octokit, Worker는 로컬 `gh`·Codex App Server·공식 Claude CLI에 연동한다. 빌드에는 tsdown, 테스트에는 Vitest를 사용한다.
+
 ## 기준 문서
 
 프로젝트 목표·요구사항은 [SPEC](docs/SPEC.md), 기술 설계와 선택 근거는 [TECH](docs/TECH.md), 개발 순서·현재 상태는 [PLAN](docs/PLAN.md), 소개·사용법은 [README](README.md)에 둔다. 작업의 맥락을 파악할 만큼 관련 문서·코드를 살펴보고, 과거 판단이 필요할 때 `docs/history/`를 찾는다. 문서를 나누는 이유는 목표·설계·진행 상태가 서로 뒤섞이거나 낡지 않게 하기 위해서다.
@@ -19,11 +27,3 @@
 - SPEC의 F/N 요구사항을 TECH의 설계와 PLAN의 P 단계로 추적할 수 있게 유지한다. ID는 의미가 바뀌어도 재사용하지 않는다.
 - PLAN에는 현재 상태와 다음 작업을 유지하고, 중요한 변경·판단·검증 경위는 작업별 `docs/history/`에 남긴다. 사소한 변경은 Git 이력으로 충분하다.
 - 문서는 각자의 역할과 기존 서술 수준에 맞는 현재 유효한 정보를 유지한다. 작업마다 변경 내역을 본문에 덧붙이거나 같은 내용을 여러 문서에 반복하지 않는다. 설명할 내용이 실제로 달라진 곳을 갱신하고, 일부만 읽어도 이해되는 구조와 필요한 짧은 섹션 설명을 유지하며 관련 중복·모순을 정리한다.
-
-## 프로젝트 개요
-
-ForgeCrew는 GitHub Enterprise Server의 Issue·PR 대화를 단일 Dispatcher가 조율하고, Windows/Linux 동료 PC의 Worker가 기존 `gh`·Codex/Claude 로그인과 로컬 환경으로 수행하는 플랫폼이다. 공통 설정·AI 지침은 Dispatcher의 단일 YAML에서 관리한다. 구체적인 실행·권한·복구 계약은 SPEC과 TECH를 따른다.
-
-## 기술 스택
-
-TypeScript·Node.js LTS와 npm workspaces를 사용한다. Dispatcher는 Hono·Drizzle/SQLite·Octokit, Worker는 로컬 `gh`·Codex App Server·공식 Claude CLI에 연동한다. 빌드에는 tsdown, 테스트에는 Vitest를 사용한다.
