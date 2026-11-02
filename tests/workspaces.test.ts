@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { mkdtemp, mkdir, readFile, writeFile, rm, symlink } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { GhClient } from '../packages/worker/src/github.ts';
+import { GitWorkspaces } from '../packages/worker/src/github/workspaces.ts';
 import { command } from '../packages/worker/src/process.ts';
 import { sessionId } from '../packages/shared/src/hash.ts';
 import type { WorkSession } from '../packages/shared/src/protocol.ts';
@@ -56,20 +56,20 @@ describe('managed Git workspaces', { timeout: 30000 }, () => {
     await git(['push', origin, 'main'], seed);
     await git(['--git-dir', origin, 'symbolic-ref', 'HEAD', 'refs/heads/main']);
     const calls: string[][] = [];
-    const gh = new GhClient(session(1).host, async (executable, args, options) => {
+    const gh = new GitWorkspaces(session(1).host, root, async (executable, args, options) => {
       calls.push([executable, ...args]);
       if (executable === 'gh' && args[0] === 'repo' && args[1] === 'clone')
         return command('git', ['clone', '--no-hardlinks', origin, args.at(-1)!], options);
       return command(executable, args, options);
     });
-    const a = await gh.workspace(root, session(1)),
-      b = await gh.workspace(root, session(2));
+    const a = await gh.prepare(session(1)),
+      b = await gh.prepare(session(2));
     expect(a).not.toBe(b);
     await writeFile(join(a, 'tracked.txt'), 'local changes\n');
     await writeFile(join(a, 'untracked.txt'), 'keep me');
     await git(['config', 'user.name', 'Local coworker'], a);
     await git(['config', 'commit.gpgsign', 'true'], a);
-    expect(await gh.workspace(root, session(1))).toBe(a);
+    expect(await gh.prepare(session(1))).toBe(a);
     expect(await readFile(join(a, 'tracked.txt'), 'utf8')).toBe('local changes\n');
     expect(await readFile(join(a, 'untracked.txt'), 'utf8')).toBe('keep me');
     expect((await readFile(join(b, 'tracked.txt'), 'utf8')).replace(/\r\n/g, '\n')).toBe(
@@ -90,7 +90,7 @@ describe('managed Git workspaces', { timeout: 30000 }, () => {
       join(root, 'workspaces', s.id),
       process.platform === 'win32' ? 'junction' : 'dir',
     );
-    await expect(new GhClient(s.host).workspace(root, s)).rejects.toThrow(
+    await expect(new GitWorkspaces(s.host, root).prepare(s)).rejects.toThrow(
       'workspace_outside_managed_root',
     );
   });

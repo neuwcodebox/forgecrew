@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { GhClient } from '../packages/worker/src/github.ts';
+import { GhClient } from '../packages/worker/src/github/client.ts';
 import { Store } from '../packages/dispatcher/src/storage/index.ts';
 import { config, worker } from './helpers.ts';
 

@@ -1,15 +1,11 @@
-import { mkdir, realpath, rename, stat } from 'node:fs/promises';
-import { join, resolve, sep } from 'node:path';
-import { randomUUID } from 'node:crypto';
-import { command } from './process.ts';
-import { atomicWrite } from './local.ts';
-import { canWrite } from '../../shared/src/input.ts';
-import { hash } from '../../shared/src/hash.ts';
-import type { Result } from '../../shared/src/types.ts';
-import type { DeliveryClaim, WorkClaim, WorkSession } from '../../shared/src/protocol.ts';
+import { canWrite } from '../../../shared/src/input.ts';
+import { hash } from '../../../shared/src/hash.ts';
+import type { Result } from '../../../shared/src/types.ts';
+import type { DeliveryClaim, WorkClaim, WorkSession } from '../../../shared/src/protocol.ts';
 
-export type GitHubComment = { id: number; body: string; user: { id: number; login: string } };
-export class GhClient {
+import { command } from '../process.ts';
+import type { GitHubComment, GitHubGateway } from './contracts.ts';
+export class GhClient implements GitHubGateway {
   readonly hostname: string;
   private readonly execute: typeof command;
   constructor(hostname: string, execute: typeof command = command) {
@@ -116,54 +112,6 @@ export class GhClient {
     }
     return JSON.stringify({ issue, comments, pull });
   }
-  async workspace(directory: string, session: WorkSession, signal?: AbortSignal): Promise<string> {
-    if (!/^[a-f0-9]{64}$/.test(session.id) || session.host !== this.hostname)
-      throw new Error('invalid_workspace_identity');
-    const root = resolve(directory, 'workspaces');
-    await mkdir(root, { recursive: true, mode: 0o700 });
-    const destination = join(root, session.id);
-    if (
-      await stat(destination).then(
-        () => true,
-        () => false,
-      )
-    ) {
-      const actual = await realpath(destination);
-      if (!actual.startsWith((await realpath(root)) + sep))
-        throw new Error('workspace_outside_managed_root');
-      const result = await this.execute('git', ['rev-parse', '--show-toplevel'], {
-        cwd: destination,
-        ...(signal ? { signal } : {}),
-      });
-      if (result.code !== 0 || resolve(result.stdout.trim()) !== actual)
-        throw new Error('workspace_requires_repair');
-      return destination;
-    }
-    const staging = join(root, '.clone-' + session.id + '-' + randomUUID());
-    // A failed partial clone is preserved for diagnosis; an existing checkout is never reset.
-    const clone = await this.execute(
-      'gh',
-      ['repo', 'clone', `https://${this.hostname}/${session.repository}.git`, staging],
-      { timeout: 120000, ...(signal ? { signal } : {}) },
-    );
-    if (clone.code !== 0) throw new Error('workspace_clone_failed');
-    if (session.kind === 'pull') {
-      const checkout = await this.execute(
-        'gh',
-        [
-          'pr',
-          'checkout',
-          String(session.number),
-          '--repo',
-          `https://${this.hostname}/${session.repository}`,
-        ],
-        { cwd: staging, timeout: 60000, ...(signal ? { signal } : {}) },
-      );
-      if (checkout.code !== 0) throw new Error('pull_checkout_failed');
-    }
-    await rename(staging, destination);
-    return destination;
-  }
   async verifyOutput(
     claim: WorkClaim,
     result: Result,
@@ -227,33 +175,4 @@ export class GhClient {
       signal,
     );
   }
-}
-export async function publishDelivery(
-  directory: string,
-  github: GhClient,
-  delivery: DeliveryClaim,
-  begin: () => Promise<unknown>,
-  receipt: (id: string) => Promise<unknown>,
-  signal?: AbortSignal,
-) {
-  signal?.throwIfAborted();
-  const existing = await github.findDelivery(delivery, signal);
-  signal?.throwIfAborted();
-  if (existing) {
-    await receipt(String(existing.id));
-    return;
-  }
-  const account = await github.account(signal);
-  if (!delivery.authors.includes(String(account.id))) throw new Error('github_identity_changed');
-  signal?.throwIfAborted();
-  await begin();
-  signal?.throwIfAborted();
-  const posted = await github.post(delivery, signal);
-  await atomicWrite(join(directory, 'receipts', delivery.id + '.json'), {
-    schemaVersion: 1,
-    id: delivery.id,
-    githubId: String(posted.id),
-  });
-  signal?.throwIfAborted();
-  await receipt(String(posted.id));
 }

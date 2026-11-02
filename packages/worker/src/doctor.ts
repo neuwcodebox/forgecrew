@@ -1,7 +1,7 @@
 import { workerVersion } from './version.ts';
 import { command, spawnProcess } from './process.ts';
 import { RpcClient } from './rpc.ts';
-import { DispatcherClient } from './client.ts';
+import { DispatcherClient } from './dispatcher/client.ts';
 import type { LocalConfig } from './local.ts';
 
 export type Diagnostic = { component: string; status: 'ok' | 'blocked'; detail: string };
@@ -51,10 +51,7 @@ export async function doctor(config: LocalConfig): Promise<Diagnostic[]> {
     return `${config.hostname}: ${user.login}`;
   });
   await check('dispatcher', async () => {
-    const status = await new DispatcherClient(config).request<{
-      configRevision: string;
-      sessions: unknown[];
-    }>('/v1/status', undefined, { method: 'GET', timeout: 5000 });
+    const status = await new DispatcherClient(config).status();
     return 'revision ' + status.configRevision + ' · sessions ' + status.sessions.length;
   });
   if (config.engines.codex)

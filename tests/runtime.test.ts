@@ -7,9 +7,9 @@ import { Store } from '../packages/dispatcher/src/storage/index.ts';
 import { createApp } from '../packages/dispatcher/src/api.ts';
 import { ConfigManager } from '../packages/shared/src/config.ts';
 import { configSource, worker } from './helpers.ts';
-import { DispatcherClient } from '../packages/worker/src/client.ts';
-import { WorkerRuntime } from '../packages/worker/src/runtime.ts';
-import { GhClient } from '../packages/worker/src/github.ts';
+import { DispatcherClient } from '../packages/worker/src/dispatcher/client.ts';
+import { WorkerRuntime } from '../packages/worker/src/runtime/index.ts';
+import type { GitHubGateway, Workspaces } from '../packages/worker/src/github/contracts.ts';
 import { acquireLock } from '../packages/worker/src/lock.ts';
 import { hash } from '../packages/shared/src/hash.ts';
 import type { LocalConfig } from '../packages/worker/src/local.ts';
@@ -30,7 +30,7 @@ function deferred<T>() {
   });
   return { promise, resolve, reject };
 }
-class FakeGithub extends GhClient {
+class FakeGithub implements GitHubGateway, Workspaces {
   posted: { id: number; body: string; user: { id: number; login: string } }[] = [];
   attempts = 0;
   losePostResponse = false;
@@ -38,27 +38,29 @@ class FakeGithub extends GhClient {
   accountLogin = 'coworker';
   readonly dir: string;
   constructor(host: string, dir: string) {
-    super(host);
     this.dir = dir;
   }
-  override async account() {
+  async account() {
     return { id: this.accountId, login: this.accountLogin };
   }
-  override async repositories(names: string[]) {
+  async repositories(names: string[]) {
     return names;
   }
-  override async context(_claim: WorkClaim, _signal?: AbortSignal) {
+  async context(_claim: WorkClaim, _signal?: AbortSignal) {
     return 'conversation from GitHub';
   }
-  override async workspace() {
+  async prepare() {
     return this.dir;
   }
-  override async findDelivery(d: DeliveryClaim) {
+  async verifyOutput() {
+    return [] as number[];
+  }
+  async findDelivery(d: DeliveryClaim) {
     return this.posted.find(
       (p) => hash(p.body) === d.body_hash && d.authors.includes(String(p.user.id)),
     );
   }
-  override async post(d: DeliveryClaim, _signal?: AbortSignal) {
+  async post(d: DeliveryClaim, _signal?: AbortSignal) {
     this.attempts++;
     const comment = {
       id: this.attempts,
@@ -162,14 +164,16 @@ async function setup(
   const logs: Record<string, unknown>[] = [];
   const runtime = new WorkerRuntime(local, dir, {
     logger: (r) => logs.push(r),
-    client: new DispatcherClient(local, fetcher),
+    dispatcher: new DispatcherClient(local, fetcher),
+    workspaces: github,
+    version: '0.1.0',
     github,
     providers: {
       [options.engine ?? 'codex']: provider,
       ...(options.secondEngine ? { claude: secondProvider } : {}),
     },
   });
-  cleanup.push(() => runtime.settleControls());
+  cleanup.push(() => runtime.controls.settle());
   const key = {
     host: local.hostname,
     repository: 'team/project-a',
@@ -195,11 +199,13 @@ async function setup(
     peerGithub.posted = github.posted;
     const peerRuntime = new WorkerRuntime(peerLocal, peerDir, {
       logger: (r) => logs.push(r),
-      client: new DispatcherClient(peerLocal, fetcher),
+      dispatcher: new DispatcherClient(peerLocal, fetcher),
+      workspaces: peerGithub,
+      version: '0.1.0',
       github: peerGithub,
       providers: { codex: peerProvider },
     });
-    cleanup.push(() => peerRuntime.settleControls());
+    cleanup.push(() => peerRuntime.controls.settle());
     await peerRuntime.initialize('r'.repeat(48));
     return { runtime: peerRuntime, provider: peerProvider, github: peerGithub, local: peerLocal };
   };
@@ -226,7 +232,7 @@ describe('Dispatcher and Worker integration', () => {
   it('claims, executes, journals and publishes, then resumes with the next central instructions', async () => {
     const f = await setup();
     await f.runtime.work();
-    await Promise.all([...f.runtime.active.values()].map((a) => a.task));
+    await Promise.all([...f.runtime.attempts.active.values()].map((a) => a.task));
     await f.runtime.work();
     expect(f.provider.requests).toHaveLength(1);
     expect(f.github.posted).toHaveLength(1);
@@ -242,7 +248,7 @@ describe('Dispatcher and Worker integration', () => {
     ).toBe(true);
     f.s.sessions.enqueue(f.id, 'comment', '42', 'next request', 'writer', Date.now() + 1);
     await f.runtime.work();
-    await Promise.all([...f.runtime.active.values()].map((a) => a.task));
+    await Promise.all([...f.runtime.attempts.active.values()].map((a) => a.task));
     expect(f.provider.requests[1]!.resume?.id).toBe('provider_session_1');
     expect(f.provider.requests[1]!.claim.runConfig.payload.agent.instructions).toContain(
       'NEW INSTRUCTIONS.',
@@ -251,7 +257,7 @@ describe('Dispatcher and Worker integration', () => {
   it('retries lost completion acknowledgement without rerunning the Provider', async () => {
     const f = await setup({ loseCompletion: true });
     await f.runtime.work();
-    await Promise.all([...f.runtime.active.values()].map((a) => a.task));
+    await Promise.all([...f.runtime.attempts.active.values()].map((a) => a.task));
     expect(await readdir(join(f.dir, 'journal'))).toHaveLength(1);
     await f.runtime.work();
     expect(f.provider.requests).toHaveLength(1);
@@ -261,7 +267,7 @@ describe('Dispatcher and Worker integration', () => {
     const f = await setup();
     f.github.losePostResponse = true;
     await f.runtime.work();
-    await Promise.all([...f.runtime.active.values()].map((a) => a.task));
+    await Promise.all([...f.runtime.attempts.active.values()].map((a) => a.task));
     await expect(f.runtime.work()).rejects.toThrow('post_response_lost');
     f.tick(f.configs.current.runtime.leaseDuration + 1);
     await f.runtime.work();
@@ -288,12 +294,12 @@ describe('Dispatcher and Worker integration', () => {
     };
     await f.runtime.work();
     await started.promise;
-    const a = [...f.runtime.active.values()][0]!;
+    const a = [...f.runtime.attempts.active.values()][0]!;
     f.s.sessions.enqueue(f.id, 'comment', 'next', 'follow-up', 'writer', Date.now() + 1);
     f.s.executions.addControl(f.id, 'stop_comment', { kind: 'stop' }, Date.now());
     await f.runtime.heartbeat();
     await a.task;
-    await f.runtime.settleControls();
+    await f.runtime.controls.settle();
     expect(f.s.sqlite.prepare('SELECT status FROM turns WHERE id=?').get(a.claim.turnId)).toEqual({
       status: 'cancelled',
     });
@@ -338,8 +344,8 @@ describe('Dispatcher and Worker integration', () => {
     );
     await f.runtime.heartbeat();
     await second.promise;
-    await Promise.all([...f.runtime.active.values()].map((a) => a.task));
-    await f.runtime.settleControls();
+    await Promise.all([...f.runtime.attempts.active.values()].map((a) => a.task));
+    await f.runtime.controls.settle();
     const next = f.provider.requests[1]!.claim;
     expect(next.turnId).toBe(previous.turnId);
     expect(next.generation).toBe(previous.generation + 1);
@@ -350,7 +356,7 @@ describe('Dispatcher and Worker integration', () => {
     const f = await setup();
     const claim = f.s.executions.claim(f.local.id, f.configs.current)!;
     claim.runConfig.payload.agent.instructions = 'tampered';
-    expect(() => f.runtime.start(claim)).toThrow();
+    expect(() => f.runtime.attempts.start(claim)).toThrow();
     expect(f.provider.requests).toHaveLength(0);
   });
   it('keeps a single local process owner per Worker identity', async () => {
@@ -407,7 +413,7 @@ describe('Dispatcher and Worker integration', () => {
     await started.promise;
     const claim = f.provider.requests[0]!.claim;
     await f.runtime.drain(0);
-    expect(f.runtime.active.size).toBe(0);
+    expect(f.runtime.attempts.active.size).toBe(0);
     expect(f.s.sqlite.prepare('SELECT status FROM turns WHERE id=?').get(claim.turnId)).toEqual({
       status: 'recovering',
     });
@@ -417,21 +423,21 @@ describe('Dispatcher and Worker integration', () => {
   it('recovers posting on another account without replaying completed Provider work', async () => {
     const f = await setup({ loseCompletion: true });
     await f.runtime.work();
-    await Promise.all([...f.runtime.active.values()].map((a) => a.task));
+    await Promise.all([...f.runtime.attempts.active.values()].map((a) => a.task));
     // The accepted completion survives even if its ACK and original process are lost.
     const peer = await f.peer();
     await peer.runtime.work();
     expect(peer.provider.requests).toHaveLength(0);
     expect(peer.github.attempts).toBe(1);
     expect(peer.github.posted[0]!.user.id).toBe(456);
-    await f.runtime.flushResults();
+    await f.runtime.results.flush();
     expect(await readdir(join(f.dir, 'journal'))).toEqual([]);
     expect(f.provider.requests).toHaveLength(1);
   });
   it('reconciles an uncertain previous account post before another Worker publishes', async () => {
     const f = await setup();
     await f.runtime.work();
-    await Promise.all([...f.runtime.active.values()].map((a) => a.task));
+    await Promise.all([...f.runtime.attempts.active.values()].map((a) => a.task));
     f.github.losePostResponse = true;
     await expect(f.runtime.work()).rejects.toThrow('post_response_lost');
     f.tick(f.configs.current.runtime.leaseDuration + 1);
@@ -451,7 +457,7 @@ describe('Dispatcher and Worker integration', () => {
       close: async () => {},
     });
     await f.runtime.work();
-    await Promise.all([...f.runtime.active.values()].map((a) => a.task));
+    await Promise.all([...f.runtime.attempts.active.values()].map((a) => a.task));
     await f.runtime.work();
     expect(f.provider.requests).toHaveLength(1);
     expect(f.github.posted).toHaveLength(0);
@@ -466,7 +472,7 @@ describe('Dispatcher and Worker integration', () => {
     await f.runtime.refreshCapabilities();
     await f.runtime.heartbeat();
     await f.runtime.work();
-    await Promise.all([...f.runtime.active.values()].map((a) => a.task));
+    await Promise.all([...f.runtime.attempts.active.values()].map((a) => a.task));
     expect(f.provider.requests[1]!.claim.turnId).toBe(f.provider.requests[0]!.claim.turnId);
   });
   it('preserves the last known engine catalogue when a refresh loses authentication', async () => {
@@ -517,7 +523,7 @@ describe('Dispatcher and Worker integration', () => {
     };
     try {
       await Promise.all([f.runtime.work(), peer.runtime.work()]);
-      expect(f.runtime.active.size + peer.runtime.active.size).toBe(1);
+      expect(f.runtime.attempts.active.size + peer.runtime.attempts.active.size).toBe(1);
       f.s.sessions.upsert(
         { ...f.key, number: 2 },
         ['ai:enabled'],
@@ -527,8 +533,8 @@ describe('Dispatcher and Worker integration', () => {
         'writer',
       );
       await Promise.all([f.runtime.work(), peer.runtime.work()]);
-      expect(f.runtime.active.size).toBe(1);
-      expect(peer.runtime.active.size).toBe(1);
+      expect(f.runtime.attempts.active.size).toBe(1);
+      expect(peer.runtime.attempts.active.size).toBe(1);
       await Promise.all([firstStarted.promise, secondStarted.promise]);
       const claim = f.provider.requests[0]!.claim;
       f.s.executions.addControl(
@@ -538,9 +544,9 @@ describe('Dispatcher and Worker integration', () => {
         Date.now(),
       );
       await f.runtime.heartbeat();
-      await f.runtime.settleControls();
-      expect(f.runtime.active.size).toBe(0);
-      expect(peer.runtime.active.size).toBe(1);
+      await f.runtime.controls.settle();
+      expect(f.runtime.attempts.active.size).toBe(0);
+      expect(peer.runtime.attempts.active.size).toBe(1);
       expect(
         f.s.sqlite.prepare("SELECT COUNT(*) AS n FROM attempts WHERE status='running'").get(),
       ).toEqual({ n: 1 });
@@ -548,7 +554,9 @@ describe('Dispatcher and Worker integration', () => {
       first.resolve({ kind: 'completed', text: 'first' });
       second.resolve({ kind: 'completed', text: 'second' });
       await Promise.all(
-        [...f.runtime.active.values(), ...peer.runtime.active.values()].map((a) => a.task),
+        [...f.runtime.attempts.active.values(), ...peer.runtime.attempts.active.values()].map(
+          (a) => a.task,
+        ),
       );
     }
   });
@@ -562,11 +570,11 @@ describe('Dispatcher and Worker integration', () => {
       close: async () => {},
     });
     await f.runtime.work();
-    const old = [...f.runtime.active.values()][0]!;
+    const old = [...f.runtime.attempts.active.values()][0]!;
     f.tick(f.configs.current.runtime.leaseDuration + f.configs.current.runtime.reassignGrace + 1);
     const peer = await f.peer();
     await peer.runtime.work();
-    await Promise.all([...peer.runtime.active.values()].map((a) => a.task));
+    await Promise.all([...peer.runtime.attempts.active.values()].map((a) => a.task));
     pending.resolve({ kind: 'completed', text: 'late stale answer' });
     await old.task;
     expect(peer.provider.requests[0]!.claim.turnId).toBe(old.claim.turnId);
@@ -579,7 +587,7 @@ describe('Dispatcher and Worker integration', () => {
   it('renews delivery ownership independently while a GitHub post is in flight', async () => {
     const f = await setup();
     await f.runtime.work();
-    await Promise.all([...f.runtime.active.values()].map((a) => a.task));
+    await Promise.all([...f.runtime.attempts.active.values()].map((a) => a.task));
     const started = deferred<void>(),
       finish = deferred<void>(),
       post = f.github.post.bind(f.github);
@@ -609,7 +617,7 @@ describe('Dispatcher and Worker integration', () => {
     async (reason) => {
       const f = await setup();
       await f.runtime.work();
-      await Promise.all([...f.runtime.active.values()].map((a) => a.task));
+      await Promise.all([...f.runtime.attempts.active.values()].map((a) => a.task));
       const started = deferred<void>(),
         controller = new AbortController();
       f.github.post = async (_d, signal) => {
@@ -640,7 +648,7 @@ describe('Dispatcher and Worker integration', () => {
   it('refuses a new post after the local GitHub account changes until capabilities are refreshed', async () => {
     const f = await setup();
     await f.runtime.work();
-    await Promise.all([...f.runtime.active.values()].map((a) => a.task));
+    await Promise.all([...f.runtime.attempts.active.values()].map((a) => a.task));
     f.github.accountId = 999;
     await expect(f.runtime.work()).rejects.toThrow('github_identity_changed');
     expect(f.github.posted).toHaveLength(0);
@@ -669,9 +677,9 @@ describe('Dispatcher and Worker integration', () => {
       'writer',
     );
     await f.runtime.work();
-    await Promise.all([...f.runtime.active.values()].map((a) => a.task));
+    await Promise.all([...f.runtime.attempts.active.values()].map((a) => a.task));
     await f.runtime.work();
-    await Promise.all([...f.runtime.active.values()].map((a) => a.task));
+    await Promise.all([...f.runtime.attempts.active.values()].map((a) => a.task));
     expect(f.provider.requests).toHaveLength(1);
     expect(f.secondProvider.requests).toHaveLength(1);
     expect(f.secondProvider.requests[0]!.claim.runConfig.engine).toBe('claude');
@@ -692,7 +700,7 @@ describe('Dispatcher and Worker integration', () => {
     await started.promise;
     await f.runtime.drain(0);
     expect(f.provider.requests).toHaveLength(0);
-    expect(f.runtime.active.size).toBe(0);
+    expect(f.runtime.attempts.active.size).toBe(0);
     expect(f.s.sqlite.prepare('SELECT status FROM turns').get()).toEqual({ status: 'recovering' });
   });
   it('preserves a request through a GitHub read outage instead of consuming it as an AI failure', async () => {
@@ -701,7 +709,7 @@ describe('Dispatcher and Worker integration', () => {
       throw new Error('github_request_failed');
     };
     await f.runtime.work();
-    await Promise.all([...f.runtime.active.values()].map((a) => a.task));
+    await Promise.all([...f.runtime.attempts.active.values()].map((a) => a.task));
     await f.runtime.work();
     expect(f.provider.requests).toHaveLength(0);
     expect(f.github.posted).toHaveLength(0);
@@ -711,7 +719,7 @@ describe('Dispatcher and Worker integration', () => {
   it('logs execution identifiers and applied revisions without logging prompt or token values', async () => {
     const f = await setup();
     await f.runtime.work();
-    await Promise.all([...f.runtime.active.values()].map((a) => a.task));
+    await Promise.all([...f.runtime.attempts.active.values()].map((a) => a.task));
     const claim = f.provider.requests[0]!.claim;
     expect(f.logs.find((r) => r.event === 'attempt_started')).toMatchObject({
       workerId: f.local.id,
@@ -723,11 +731,7 @@ describe('Dispatcher and Worker integration', () => {
     });
     expect(JSON.stringify(f.logs)).not.toContain(f.local.token);
     expect(JSON.stringify(f.logs)).not.toContain(claim.runConfig.payload.agent.instructions);
-    const status = await f.runtime.client.request<{ worker: { configRevision: string } }>(
-      '/v1/status',
-      undefined,
-      { method: 'GET' },
-    );
+    const status = await f.runtime.dispatcher.status();
     expect(status.worker.configRevision).toBe(claim.runConfig.configRevision);
   });
 
@@ -735,7 +739,7 @@ describe('Dispatcher and Worker integration', () => {
     const f = await setup();
     f.github.verifyOutput = async () => [99];
     await f.runtime.work();
-    await Promise.all([...f.runtime.active.values()].map((a) => a.task));
+    await Promise.all([...f.runtime.attempts.active.values()].map((a) => a.task));
     expect(f.s.sqlite.prepare('SELECT status FROM turns').get()).toEqual({ status: 'completed' });
     expect(
       f.logs.some((r) => r.event === 'output_attribution_missing' && r.pullNumber === 99),
@@ -800,7 +804,7 @@ describe('Dispatcher and Worker integration', () => {
     };
     await f.runtime.work();
     await started.promise;
-    const active = [...f.runtime.active.values()][0]!;
+    const active = [...f.runtime.attempts.active.values()][0]!;
     const before = f.s.sqlite
       .prepare('SELECT lease_until FROM attempts WHERE id=?')
       .get(active.claim.attemptId) as { lease_until: number };

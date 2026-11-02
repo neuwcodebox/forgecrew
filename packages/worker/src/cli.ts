@@ -5,10 +5,10 @@ import { fileURLToPath } from 'node:url';
 import { homedir } from 'node:os';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { LocalConfigSchema, atomicWrite } from './local.ts';
-import { DispatcherClient } from './client.ts';
+import { DispatcherClient } from './dispatcher/client.ts';
 import { doctor } from './doctor.ts';
 import { workerVersion } from './version.ts';
-import { WorkerRuntime } from './runtime.ts';
+import { createWorker } from './application.ts';
 import { acquireLock } from './lock.ts';
 import { prepareLauncher } from './launcher/install.ts';
 import { startLauncher, stopLauncher, launcherStatus } from './launcher/control.ts';
@@ -61,10 +61,7 @@ async function main() {
     let dispatcher: unknown = { available: false, reason: 'local_configuration_unavailable' };
     if (local)
       try {
-        dispatcher = await new DispatcherClient(local).request('/v1/status', undefined, {
-          method: 'GET',
-          timeout: 5000,
-        });
+        dispatcher = await new DispatcherClient(local).status();
       } catch {
         dispatcher = { available: false, reason: 'dispatcher_status_unavailable' };
       }
@@ -124,7 +121,7 @@ async function main() {
     }
     await atomicWrite(configPath, config);
     await prepareLauncher(directory, dirname(dirname(fileURLToPath(import.meta.url))), configPath);
-    const runtime = new WorkerRuntime(config, join(directory, 'workers', config.id));
+    const runtime = createWorker(config, join(directory, 'workers', config.id));
     await runtime.initialize(process.env.FORGECREW_REGISTRATION_TOKEN);
     if (args.includes('--autostart')) await setAutostart(directory, true);
     console.log('Worker setup complete. Run forgecrew start.');
@@ -138,7 +135,7 @@ async function main() {
     const stop = () => controller.abort();
     process.once('SIGINT', stop);
     process.once('SIGTERM', stop);
-    const runtime = new WorkerRuntime(config, runtimeDirectory),
+    const runtime = createWorker(config, runtimeDirectory),
       updater = new UpdateManager(directory);
     runtime.setUpdateHandler((p, signal) =>
       updater.check(p, (timeout) => runtime.drain(timeout, signal), signal),
