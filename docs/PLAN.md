@@ -5,7 +5,7 @@
 - 단계: **P1–P5 구현 진행 중. Worker 실행·게시·Launcher 전환 경로의 로컬 통합 검증 완료**.
 - shared·dispatcher·worker 패키지에 중앙 YAML·SQLite·HTTP·활성화 구간·PR 리뷰·전체 재동기화 폴링과 두 Provider 어댑터를 구현했다. Worker의 setup/run/doctor, 독립 Heartbeat·Lease 감시, 격리 clone, 세션 재개, 완료 저널·게시 재조정, stop·steer를 연결했다. 실행 직전 중앙 권한·원본 댓글 검증과 시스템 라벨 동기화도 구현했다.
 - `npm run check`: TypeScript 검사, Vitest 90개 테스트, tsdown 기반 세 패키지 JS 빌드, 빌드된 CLI·Dispatcher 프로세스 기동·SQLite·HTTP 인증·설정 재로드 smoke 검사를 통과했다. 로컬 검증 환경은 Linux / Node.js 24.22.1이다. Provider 프로세스와 GitHub 통합 Fixture를 실제 구독 실행과 구별한다. 사내 계정·실제 구독 모델 Turn·Windows 실제 사용자 환경·실제 사내 npm 업데이트·로그인 자동 시작 시험은 수행하지 않았다. Launcher 자식 프로세스 전환·롤백·중복 기동·종료, drain과 패키지 격리 설치는 로컬 시험으로 확인했다.
-- Linux/Windows GitHub Actions 검사와 Dispatcher Dockerfile을 추가했다. Linux/Windows CI는 로컬 검사와 별도로 확인한다. Docker 이미지 빌드·비루트/읽기 전용 실행·SQLite 재시작·정지 볼륨 백업/복원은 Linux CI에서 통과했다.
+- Linux/Windows GitHub Actions 검사와 Dispatcher Dockerfile을 추가했다. 코드 `4ddc3c8`의 [CI 41451169932](https://github.com/neuwcodebox/forgecrew/actions/runs/41451169932)에서 Linux/Windows의 90개 테스트·빌드·배포 패키지 smoke와 Docker 검사가 모두 통과했다. Docker 검사는 비루트/읽기 전용 실행·원자적 YAML 교체·SQLite 재시작·정지 볼륨 백업/복원을 포함한다.
 - 제품 정책과 배포 구조는 [SPEC](SPEC.md), 구체적인 동작 계약은 [TECH](TECH.md)를 기준으로 한다.
 - 외부 환경에서 제공할 값은 GHES 호스트·테스트 저장소·PAT, Dispatcher 주소, 사내 npm 레지스트리·scope다. Worker는 기존 `gh` 및 Codex/Claude 구독 로그인을 사용한다.
 - 기존 개발 코드가 있다면 먼저 구조와 동작을 확인한다. 문서와 파일 배치가 다르다는 이유로 전체를 재작성하지 않는다.
@@ -44,7 +44,7 @@
 
 **상태:** 진행 중.
 
-- [ ] Docker Dispatcher와 영속 SQLite, migration·기본 health 경로를 구현한다.
+- [x] Docker Dispatcher·영속 SQLite·migration·health 경로를 구현하고 이미지 기동·재시작·백업 복원을 CI에서 확인했다.
 - [x] 저장소·조회 종류별 증분 폴링·전체 재동기화·페이지 순회·중복 제거·활성화 구간과 최초 본문을 구현하고 Fixture로 확인했다.
 - [x] 권한·모델/effort 라벨 해석·충돌 보류와 실행 직전 원본 확인을 구현하고 계약 시험을 통과했다.
 - [x] Session/Input/Turn/Attempt·FIFO·stop·steer·질문 후 새 Turn을 연결하고 저장소·Provider·Worker 통합 Fixture로 확인했다.
@@ -211,6 +211,12 @@
 
 ## 바로 이어갈 작업
 
-**P1의 실제 구독 런타임 시험과 P2의 폴링 정합성을 진행한다.** 두 어댑터와 Worker 루프는 구현되었으며 실제 설치 환경에서 Auto Review·stop·steer·질문 종료를 검증해야 한다. 폴러에는 PR 리뷰 본문 수집, 활성화 구간 전체 보정과 시스템 배정/상태 라벨 동기화가 남아 있다. Worker는 실행 직전 Write 권한·일반 댓글 삭제/편집을 재확인하며, 변경된 입력을 최신 큐 revision으로 재접수하는 처리는 보완해야 한다. Launcher·사용자 자동 시작·무인 업데이트와 Windows 실제 시험을 이어간다. 외부 환경값이 필요한 시험만 대기로 두고 독립 작업을 계속한다.
+**구현된 경로의 실제 환경 검증과 아직 시험하지 않은 장애 조합을 진행한다.** PR 리뷰 본문·활성화 구간 보정·시스템 라벨 동기화·실행 직전 권한/원본 확인, Launcher·업데이트·자동 시작 어댑터는 구현되어 있다. 이를 재구현하지 말고 다음 항목부터 확인한다.
+
+1. GHES 테스트 저장소와 Worker의 기존 계정으로 요청·후속 대화·Write 권한 변경·댓글 편집/삭제·실제 게시를 시험한다. Codex/Claude 구독 모델의 카탈로그·실제 Turn·Auto Review·stop·steer·질문 종료와 중앙/저장소 지침 적용을 확인한다. 현재 Provider 결과는 프로세스 Fixture이며 실제 모델 Turn 검증은 아니다.
+2. 두 Worker·두 세션의 경쟁 배정, Lease 만료·절전 복귀·stale 결과, 다른 Worker의 Delivery만 복구, dirty workspace 보존과 설정 경합의 미검증 조합을 시험한다.
+3. 사내 registry·정확한 package/scope를 확정해 실제 릴리스 감지·설치·drain·전환·rollback을 시험한다. Windows/Linux 로그인 자동 시작·로그아웃·자식 프로세스 트리 종료·기존 사용자 환경 유지도 실제 OS에서 확인한다.
+
+검증에 필요한 외부 값은 현재 상태에 정리했다. 실제 사내 값이나 계정이 없는 시험은 완료 표시하지 않는다. 최근 배포 검증·판단은 [Launcher 기록](history/2026-11-02-launcher-updates.md), Provider·입력·게시 계약은 [런타임 기록](history/2026-11-02-runtime-contracts.md)에서 이어 읽는다.
 
 문서의 개발 순서는 제품 기능의 우선순위이며 실사용 완료 범위를 줄이는 기준이 아니다. 구현 중 필수 동작을 바꾸어야 할 이유가 발견되면 영향과 대안을 먼저 제시하고, 현재 동작 문서와 계획을 함께 갱신한다.
