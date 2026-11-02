@@ -4,10 +4,11 @@
 
 - 단계: **Worker 실행·게시·분산 복구·Launcher/업데이트 구현과 사전 검증 완료. 실제 사내 수용 검증 대기**.
 - shared·dispatcher·worker 패키지에 중앙 YAML·SQLite·HTTP·활성화 구간·PR 리뷰·전체 재동기화 폴링과 두 Provider 어댑터를 구현했다. Worker의 setup/run/doctor, 독립 Heartbeat·Lease 감시, 격리 clone, 세션 재개, 완료 저널·게시 재조정, stop·steer를 연결했다. 실행 직전 중앙 권한·원본 댓글 검증과 시스템 라벨 동기화도 구현했다.
-- `npm run check`: TypeScript 검사, Vitest 138개 테스트, tsdown 기반 세 패키지 JS 빌드, 빌드된 CLI·Dispatcher 프로세스 기동·SQLite·HTTP 인증·설정 재로드 smoke 검사를 통과했다. 로컬 검증 환경은 Linux / Node.js 24.22.1이다. Provider 프로세스와 GitHub 통합 Fixture를 실제 구독 실행과 구별한다. 사내 계정·실제 구독 모델 Turn·Windows 실제 사용자 환경·실제 사내 npm 업데이트·로그인 자동 시작 시험은 수행하지 않았다. Launcher 자식 프로세스 전환·롤백·중복 기동·종료, drain·패키지 격리 설치와 loopback npm 레지스트리의 실제 tarball 다운로드·자동 전환·불량 버전 rollback·ID/저널/작업 파일 보존을 로컬 시험으로 확인했다.
-- 코드 `8f24a96`의 [CI 41468036109](https://github.com/neuwcodebox/forgecrew/actions/runs/41468036109)에서 Linux/Windows의 포맷·미사용 코드·타입 검사, 138개 테스트·빌드·배포 패키지 실행·실제 npm tarball 자동 전환/rollback smoke와 Docker 검사가 모두 통과했다. Docker 검사는 비루트/읽기 전용 실행·원자적 YAML 교체·SQLite 재시작·정지 볼륨 백업/복원을 포함한다.
+- `npm run check`: TypeScript 검사, Vitest 168개 테스트, tsdown 기반 세 패키지 JS 빌드, 빌드된 CLI·Dispatcher 프로세스 기동·SQLite·HTTP 인증·설정 재로드 smoke 검사를 통과했다. 로컬 검증 환경은 Linux / Node.js 24.22.1이다. Provider 프로세스와 GitHub 통합 Fixture를 실제 구독 실행과 구별한다. 사내 계정·실제 구독 모델 Turn·Windows 실제 사용자 환경·실제 사내 npm 업데이트·로그인 자동 시작 시험은 수행하지 않았다. Launcher 자식 프로세스 전환·롤백·중복 기동·종료, drain·패키지 격리 설치와 loopback npm 레지스트리의 실제 tarball 다운로드·자동 전환·불량 버전 rollback·ID/저널/작업 파일 보존을 로컬 시험으로 확인했다.
+- 코드 `548f3b1`의 [CI 41544032721](https://github.com/neuwcodebox/forgecrew/actions/runs/41544032721)에서 Linux/Windows의 포맷·미사용 코드·타입 검사, 168개 테스트·빌드·배포 패키지 실행·실제 npm tarball 자동 전환/rollback smoke와 Docker 검사가 모두 통과했다. Docker 검사는 비루트/읽기 전용 실행·원자적 YAML 교체·SQLite 재시작·정지 볼륨 백업/복원을 포함한다.
 - 책임별 저장소·Worker 실행 유스케이스·명시적 외부 서비스 계약으로 리팩토링했다. CLI, 설정 수명, GitHub 수집과 Provider 전송·카탈로그를 분리했으며 포맷·미사용 코드 검사를 기본 검증에 포함했다. setup의 기존 ID·토큰·엔진 경로 보존과 잘못된 Provider 세션 ID 거절을 시험에 추가했다. 구조·검증 근거는 [리팩토링 기록](history/2026-11-02-refactoring.md)을 따른다.
 - 후속 검토에서 중단 완료 대기·Provider 정리 실패 시 terminal 결과 보존·능력 갱신 경합·분할 Delivery 순서를 보정하고 회귀 시험 7개를 추가했다. 기존 모듈 안의 수정이며 경위는 [강건성 검토 기록](history/2026-11-02-resilience.md)을 따른다.
+- 핵심 요구 재검토에서 전체 입력 종류의 실행 직전 검증·제어 접수 시 Write 권한 재확인, stop의 preflight/release/steer 경합, 명령 순차 처리·미적용 안내, 최초 본문·숫자 ID 순서와 Launcher READY 저장 재시도를 보완했다. 30개 계약 시험을 추가했으며 [핵심 요구 보완 기록](history/2026-11-03-core-contracts.md)에 근거를 남겼다.
 - 제품 정책과 배포 구조는 [SPEC](SPEC.md), 구체적인 동작 계약은 [TECH](TECH.md)를 기준으로 한다.
 - 외부 환경에서 제공할 값은 GHES 호스트·테스트 저장소·PAT, Dispatcher 주소, 사내 npm 레지스트리·scope다. Worker는 기존 `gh` 및 Codex/Claude 구독 로그인을 사용한다.
 - 기존 개발 코드가 있다면 먼저 구조와 동작을 확인한다. 문서와 파일 배치가 다르다는 이유로 전체를 재작성하지 않는다.
@@ -151,7 +152,7 @@
 
 ## 통합 검증 시나리오
 
-아래 표는 전체 제품 수용 시험이다. 현재 `tests/`의 138개 시험과 `scripts/smoke.mjs`는 설정·모델 선택·상태 전이·HTTP·기본 폴링·Provider 프로세스·Worker 실행/제어/게시·빌드 산출물 기동의 계약을 검증한다. 이 통과를 사내 GitHub·실제 구독 런타임·Windows 실제 사용자 환경·무인 업데이트의 종단간 시험 통과로 취급하지 않는다.
+아래 표는 전체 제품 수용 시험이다. 현재 `tests/`의 168개 시험과 `scripts/smoke.mjs`는 설정·모델 선택·상태 전이·HTTP·기본 폴링·Provider 프로세스·Worker 실행/제어/게시·빌드 산출물 기동의 계약을 검증한다. 이 통과를 사내 GitHub·실제 구독 런타임·Windows 실제 사용자 환경·무인 업데이트의 종단간 시험 통과로 취급하지 않는다.
 
 | ID | 시나리오 | 기대 결과 | 요구·단계 |
 |---|---|---|---|
